@@ -3,7 +3,7 @@ import torch
 import torch.utils.data
 import os
 
-__all__ = ['load_dataset']
+__all__ = ['load_dataset', 'generate_dataset']
 
 
 
@@ -50,7 +50,7 @@ def load_gaussian_ring_dataset(labels, tot_dataset_size):
 
     return pos, labels
     
-def generate_dataset(name, location = None, **kwargs):
+def generate_dataset(name, **kwargs):
     if name not in get_dataset_names():
         raise ValueError(f"'{name}' is not one of the example datasets.")
         
@@ -69,7 +69,8 @@ def load_dataset(filename):
         raise ValueError('You need to specify an existing dataset as filename.')
         
     x_labels = data['parameters']
-    
+    xs = data['x_train']
+
     #drop the age column
     xs = xs[:,1:]
     x_labels = x_labels[1:]
@@ -77,7 +78,8 @@ def load_dataset(filename):
     # normalize x
     xs = (xs - xs.min(axis=0)) / (xs.max(axis=0) - xs.min(axis=0))
     xs = torch.from_numpy(xs).float()
-    
+
+    #y is already normalized
     ys = torch.from_numpy(data['y_train']).float()
 
     return xs,ys,x_labels    
