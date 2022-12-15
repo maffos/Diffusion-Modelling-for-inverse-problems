@@ -14,76 +14,101 @@ import models
 
 def train(model,
           optimizer,
-          data_filename,
+          dataset,
           num_epochs,
           batch_size,
           save_path,
           eval_metric,
-          train_size = .75,
-          val_size = .1,
-          validation_epoch = 100):
-    
-    #data preparation
-    xs,ys,labels = utils.load_dataset(data_filename)
+          log_dir,
+          random_state,
+          train_size,
+          validate_every_ith_epoch = 100,
+          store_every_ith_epoch = 50):
 
-    #split the data in training, validation and test set
-    x_train, x_test, y_train, y_test = train_test_split(xs,ys, train_size=train_size)
-    x_val, x_test, y_val, y_test = train_test_split(x_test, y_test, train_size = val_size/(1-train_size))
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # load the dataset
+    xs, ys, labels = utils.load_dataset(dataset)
+    # split the data in training and test set
+    x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=train_size, random_state=random_state)
 
-    eval_loader = utils.get_dataloader(x_val,y_val, batch_size)
+    eval_loader = utils.get_dataloader(x_test, y_test, batch_size)
     # keep track of the validation score of the best model
     best_model_score = torch.inf
 
-    writer = SummaryWriter()
+    writer = SummaryWriter(log_dir)
     prog_bar = tqdm(total=num_epochs)
 
     for i in range(num_epochs):
-
-        #perform model evaluation each ith epoch to store the current best model
-        if i % validation_epoch == 0:
-            model.eval()
-            mean_loss = model.eval_pass(eval_loader, eval_metric)
-
-            # store current model as best if it's best
-            if mean_loss < best_model_score:
-                best_model_score = mean_loss
-                best_model_fname = os.path.join(save_path, 'best_model_epoch%d.pt'%i)
-                torch.save(model.state_dict(), best_model_fname)
-            writer.add_scalar('Loss/eval', mean_loss, i)
 
         train_loader = utils.get_dataloader(x_train, y_train, batch_size)
         mse = nn.MSELoss()
 
         mean_loss = model.train_pass(train_loader, mse, optimizer)
 
-        #store current model
-        current_model_fname = os.path.join(save_path, 'current_model_epoch%d.pt'%i)
-        torch.save(model.state_dict(), current_model_fname)
+        #helper function so that we don't need to write down the dict twice. Needs to be defined within the training loop
+        def _state_dict():
+            return {
+                'epoch': i,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': mean_loss,
+                'best_model_score': best_model_score,
+                'data_filename': data_filename,
+                'random_state': random_state,
+                'train_size': train_size,
+                'batch_size': batch_size,
+                'log_dir': log_dir
+            }
+
+        #store current states
+        if i % store_every_ith_epoch == 0:
+            current_model_path = os.path.join(save_path, 'current_model.pt')
+            torch.save(_state_dict(), current_model_path)
 
         writer.add_scalar('Loss/train', mean_loss, i)
+
+        # perform model evaluation each ith epoch to store the current best model
+        if i % validate_every_ith_epoch == 0:
+            model.eval()
+            score = model.eval_pass(eval_loader, eval_metric)
+
+            # store current model as best if it's best
+            if score < best_model_score:
+                best_model_score = score
+                best_model_path = os.path.join(save_path, 'best_model.pt')
+                torch.save(_state_dict(), best_model_path)
+
+            writer.add_scalar('Loss/test', mean_loss, i)
+
         prog_bar.set_description('loss: {:.4f}'.format(mean_loss))
         prog_bar.update()
-        
+
+
 if __name__ == '__main__':
     num_epochs = 10000
     lr = 1e-4
-    x_dim = 6
-    y_dim = 469
     hidden_size = 512
     batch_size = 100
-
+    x_dim = 6
+    y_dim = 468
+    random_state = 7
+    train_size = .8
     data_filename = 'data/uniform_age_25/npz/AbdAorta_PPG.npz'
     save_dir = 'models/surrogate/MLP'
+    log_dir = 'runs/exp1'
+
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
     model = models.MLP(x_dim,y_dim,hidden_size)
+    #todo: add resume training
+    #todo: add hyper-parameters like learning rate, optimizer, batch size... to be read from a configuration file
     optimizer = 'Adam'
     if optimizer == 'Adam':
         optimizer = Adam(model.parameters(), lr = lr)
     else:
         raise ValueError('Given optimizer is currently not supported')
 
-    train(model, optimizer, data_filename, num_epochs, batch_size, save_dir, ls.mean_relative_error)
+    train(model, optimizer, data_filename, num_epochs, batch_size, save_dir, ls.mean_relative_error, log_dir, random_state, train_size)
 
     

@@ -17,5 +17,5 @@ def forwardBackwardKLLoss(x,z,jac_inv, log_det_J, y_true, y_noise, latent_prior,
     return forward_kl * (1 - conv_lambda) + (backward_kl + loss_relu) * conv_lambda
 
 def mean_relative_error(y_true, y_predict):
-
-    return torch.mean((y_true-y_predict)**2/(y_true))
+    #todo: doesn't work yet when y_predict is 0
+    return torch.mean((y_true-y_predict)**2/y_true)

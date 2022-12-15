@@ -79,8 +79,8 @@ def load_dataset(filename):
     xs = (xs - xs.min(axis=0)) / (xs.max(axis=0) - xs.min(axis=0))
     xs = torch.from_numpy(xs).float()
 
-    #y is already normalized
-    ys = torch.from_numpy(data['y_train']).float()
+    #y is already normalized. But throw away first entry as it is always 0
+    ys = torch.from_numpy(data['y_train'][:,1:]).float()
 
     return xs,ys,x_labels    
     

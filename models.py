@@ -7,7 +7,7 @@ import os
 
 class INN(GraphINN):
 
-    def __init__(self,num_layers, sub_net_size,dimension,dimension_condition, training_dir):
+    def __init__(self,num_layers, sub_net_size,dimension,dimension_condition):
 
         self.sub_net_size = sub_net_size
         self.num_layers = num_layers
@@ -15,7 +15,7 @@ class INN(GraphINN):
         self.condition_dimension = dimension_condition
         self.nodes = [InputNode(dimension, name='input')]
         self.condition = ConditionNode(dimension_condition, name='condition')
-        self.training_dir = training_dir
+
         for k in range(num_layers):
             self.nodes.append(Node(self.nodes[-1],
                               GLOWCouplingBlock,
@@ -56,11 +56,11 @@ class MLP(nn.Sequential):
             mean_loss = 0
             for k, (x, y) in enumerate(data_loader()):
                 loss = loss_fn(y, self.forward(x))
-                mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-
+                mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
         return mean_loss
 
     def train_pass(self, data_loader, loss_fn, optimizer):
+        #todo: check if optimizer gets updated when sent to model class or if it explixitly needs to be passed back
         self.train()
         mean_loss = 0
         for k, (x, y) in enumerate(data_loader()):
