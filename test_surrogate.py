@@ -5,6 +5,16 @@ from sklearn.model_selection import train_test_split
 import models
 import utils
 import loss as ls
+
+def eval_pass(data_loader, loss_fn):
+    with torch.no_grad():
+        model.eval()
+        mean_loss = 0
+        for k, (x, y) in enumerate(data_loader()):
+            loss = loss_fn(y, model(x))
+            mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
+    return mean_loss
+
 def test(model, metric, data_filename, train_size, random_state, batch_size, log_dir, epoch):
 
     # load the dataset
@@ -14,7 +24,7 @@ def test(model, metric, data_filename, train_size, random_state, batch_size, log
     x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=train_size, random_state = random_state)
 
     data_loader = utils.get_dataloader(x_test,y_test, batch_size)
-    score = model.eval_pass(data_loader, metric)
+    score = eval_pass(data_loader, metric)
     writer.add_scalar('Loss/test', score, epoch)
     print('Score on the test set is ', score)
 

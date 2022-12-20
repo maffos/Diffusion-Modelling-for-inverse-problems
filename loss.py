@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-def gaussian_likelihood(y_obs, y_true, sigma):
+def norm_pdf(y_obs, y_true, sigma):
     """Returns gaussian log-likelihood"""
     return (-0.5* (y_obs-y_true)**2/sigma**2).sum(axis=1)
 

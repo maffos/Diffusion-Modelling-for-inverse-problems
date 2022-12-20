@@ -12,6 +12,30 @@ import loss as ls
 import models
 
 
+def eval_pass(data_loader, loss_fn):
+    with torch.no_grad():
+        model.eval()
+        mean_loss = 0
+        for k, (x, y) in enumerate(data_loader()):
+            loss = loss_fn(y, model(x))
+            mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
+    return mean_loss
+
+
+def train_pass(data_loader, loss_fn):
+    # todo: check if optimizer gets updated when sent to model class or if it explixitly needs to be passed back
+    model.train()
+    mean_loss = 0
+    for k, (x, y) in enumerate(data_loader()):
+        y_pred = model(x)
+        loss = loss_fn(y, y_pred)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
+
+    return mean_loss
 def train(model,
           optimizer,
           dataset,
@@ -43,7 +67,7 @@ def train(model,
         train_loader = utils.get_dataloader(x_train, y_train, batch_size)
         mse = nn.MSELoss()
 
-        mean_loss = model.train_pass(train_loader, mse, optimizer)
+        mean_loss = train_pass(train_loader, mse)
 
         #helper function so that we don't need to write down the dict twice. Needs to be defined within the training loop
         def _state_dict():
@@ -70,7 +94,7 @@ def train(model,
         # perform model evaluation each ith epoch to store the current best model
         if i % validate_every_ith_epoch == 0:
             model.eval()
-            score = model.eval_pass(eval_loader, eval_metric)
+            score = eval_pass(eval_loader, eval_metric)
 
             # store current model as best if it's best
             if score < best_model_score:

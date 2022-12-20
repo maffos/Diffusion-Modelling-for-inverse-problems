@@ -48,28 +48,3 @@ class MLP(nn.Sequential):
                       nn.Linear(hidden_layer_size, hidden_layer_size),
                       nn.ReLU(),
                       nn.Linear(hidden_layer_size, output_dimension))
-
-    def eval_pass(self, data_loader, loss_fn):
-
-        with torch.no_grad():
-            self.eval()
-            mean_loss = 0
-            for k, (x, y) in enumerate(data_loader()):
-                loss = loss_fn(y, self.forward(x))
-                mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-        return mean_loss
-
-    def train_pass(self, data_loader, loss_fn, optimizer):
-        #todo: check if optimizer gets updated when sent to model class or if it explixitly needs to be passed back
-        self.train()
-        mean_loss = 0
-        for k, (x, y) in enumerate(data_loader()):
-            y_pred = self.forward(x)
-            loss = loss_fn(y, y_pred)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-
-        return mean_loss
