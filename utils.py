@@ -82,8 +82,16 @@ def load_dataset(filename):
     #y is already normalized. But throw away first entry as it is always 0
     ys = torch.from_numpy(data['y_train'][:,1:]).float()
 
-    return xs,ys,x_labels    
-    
+    return xs,ys,x_labels
+
+def get_x_minmax(filename):
+    data = np.load(filename, allow_pickle=True)["data"].item()
+    x = data['x_train'][:,1:]
+    return x.min(axis=0),x.max(axis=0)
+def reverse_preprocessing(x, filename):
+
+    x_min, x_max = get_x_minmax(filename)
+    return x*(x_max-x_min)+x_min
 def get_dataloader(x, y, batch_size):
     perm = torch.randperm(len(x))
     x = x[perm]
