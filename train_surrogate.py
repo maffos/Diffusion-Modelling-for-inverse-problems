@@ -45,30 +45,33 @@ def train_pass(model, optimizer, data_loader, loss_fn, **loss_params):
 
 
 def train(model,
-          optimizer,
           dataset,
+          optimizer,
           num_epochs,
           batch_size,
           save_path,
           loss_fn,
           eval_metric,
           log_dir,
-          random_state,
-          train_size,
+          train_size = .8,
+          random_state = 7,
           checkpoint_file=None,
           resume_training=False,
           validate_every_ith_epoch=50,
           store_every_ith_epoch=20,
           **params):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # load the dataset
-    xs, ys, labels = utils.load_dataset(dataset)
-    # split the data in training and test set
-    x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=train_size, random_state=random_state)
 
+    if isinstance(dataset, str):
+        # load the dataset
+        xs, ys, labels = utils.load_dataset(dataset)
+        # split the data in training and test set
+        x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=train_size, random_state=random_state)
+    else:
+        x_train,x_val,y_train,y_val = dataset
     # eval_loader = DataLoader([x_test, y_test], batch_size, shuffle = False, num_workers= 8)
     # train_loader = DataLoader([x_train, y_train], batch_size, shuffle = True, num_workers=8)
-    eval_loader = utils.get_dataloader(x_test, y_test, batch_size)
+    eval_loader = utils.get_dataloader(x_val, y_val, batch_size)
 
     # restore model from checkpoint
     if resume_training:
@@ -127,6 +130,7 @@ def train(model,
         prog_bar.set_description('loss: {:.4f}'.format(mean_loss))
         prog_bar.update()
 
+    return model
 
 if __name__ == '__main__':
     num_epochs = 10000
@@ -141,10 +145,11 @@ if __name__ == '__main__':
     save_dir = 'models/surrogate/MLP/testbed'
     checkpoint_file = 'models/surrogate/MLP/MSE/current_model.pt'
     log_dir = 'runs/testbed'
-    loss_fn = ls.mean_relative_error
+    loss_fn = ls.MultipleLoss(nn.MSELoss(), ls.FftMseLoss())
     eval_metric = ls.mean_relative_error
-    #params = {'flow': 0,
-    #          'fhigh': 3}
+    loss2_params = {'flow': 0,
+              'fhigh': 3,
+              'lmbd': .1}
 
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -157,5 +162,5 @@ if __name__ == '__main__':
     else:
         raise ValueError('Given optimizer is currently not supported')
 
-    train(model, optimizer, data_filename, num_epochs, batch_size, save_dir, loss_fn, eval_metric, log_dir,
-          random_state, train_size, checkpoint_file, resume_training=True)
+    model = train(model, data_filename, optimizer, num_epochs, batch_size, save_dir, loss_fn, eval_metric, log_dir,
+          random_state, train_size, checkpoint_file, resume_training=True, **loss2_params)

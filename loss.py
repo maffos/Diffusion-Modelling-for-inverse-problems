@@ -44,3 +44,20 @@ class FftMseLoss(object):
         #loss = torch.mean(torch.sqrt(torch.abs(yf_true-yf_pred)**2)).to(device)
         loss = torch.mean((yf_true-yf_pred).abs()**2)
         return loss
+
+class MultipleLoss(object):
+
+    def __init__(self, loss1, loss2):
+        super(MultipleLoss, self).__init__()
+        self.loss1_fn = loss1
+        self.loss2_fn = loss2
+
+    """
+    So far only the MSE is considered as first loss. Probably we will not have to consider other types of loss functions.
+    Therefore params can only be passed to the second loss function. So far it is not planned to integrate passing
+    params to the first loss,too. But it might become necessary in the future.
+    """
+    def __call__(self, y_true, y_predict, lmbd, **params):
+
+        loss = (1-lmbd)*self.loss1_fn(y_true,y_predict) + lmbd * self.loss2_fn(y_true, y_predict, **params)
+        return loss

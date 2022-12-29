@@ -6,7 +6,7 @@ import models
 import utils
 import loss as ls
 
-def eval_pass(data_loader, loss_fn):
+def eval_pass(model, data_loader, loss_fn):
     with torch.no_grad():
         model.eval()
         mean_loss = 0
@@ -15,18 +15,14 @@ def eval_pass(data_loader, loss_fn):
             mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
     return mean_loss
 
-def test(model, metric, data_filename, train_size, random_state, batch_size, log_dir, epoch):
+def test(model, xs, ys, metric):
 
-    # load the dataset
-    xs, ys, labels = utils.load_dataset(data_filename)
-    writer = SummaryWriter(log_dir)
-    # recover the same test set that was held out during training
-    x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=train_size, random_state = random_state)
+    with torch.no_grad():
+        model.eval()
+        score = metric(ys, model(xs))
 
-    data_loader = utils.get_dataloader(x_test,y_test, batch_size)
-    score = eval_pass(data_loader, metric)
-    writer.add_scalar('Loss/test', score, epoch)
     print('Score on the test set is ', score)
+    return score
 
 if __name__ == '__main__':
 
@@ -38,4 +34,8 @@ if __name__ == '__main__':
     checkpoint = torch.load(PATH)
     model.load_state_dict(checkpoint['model_state_dict'])
     metric = ls.mean_relative_error
-    test(model, metric, checkpoint['data_filename'], checkpoint['train_size'], checkpoint['random_state'], checkpoint['batch_size'], checkpoint['log_dir'], checkpoint['epoch'])
+    # load the dataset
+    xs, ys, labels = utils.load_dataset(checkpoint['data_filename'])
+    # split the data in training and test set
+    x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=train_size, random_state=random_state)
+    score = test(model, x_test, y_test, metric)

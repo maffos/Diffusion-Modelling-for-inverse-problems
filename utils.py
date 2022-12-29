@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.utils.data
 import os
+import itertools
 
 __all__ = ['load_dataset', 'generate_dataset']
 
@@ -113,3 +114,10 @@ def get_epoch_dataloader_noise(x_train, y_train, sigma):
             yield x[i:i + batch_size], y[i:i + batch_size], y_train[i:i+batch_size]
 
     return epoch_data_loader
+
+#code was taken from https://stackoverflow.com/questions/5228158/cartesian-product-of-a-dictionary-of-lists
+def product_dict(**kwargs):
+    keys = kwargs.keys()
+    vals = kwargs.values()
+    for instance in itertools.product(*vals):
+        yield dict(zip(keys, instance))
