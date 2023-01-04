@@ -1,11 +1,11 @@
-from train_surrogate import train
+from models.surrogate_MLP import train
 import loss as ls
 import os
-import models
+import nets
 from torch.optim import Adam
 import utils
 from torch import nn
-from test_surrogate import test
+from models.surrogate_MLP import test
 from sklearn.model_selection import train_test_split
 import numpy as np
 
@@ -17,8 +17,10 @@ def grid_search(model_fn, dataset, init_params, optimizer_fn, param_grid):
         model = model_fn(*init_params)
         lr = params.pop('lr')
         optimizer = optimizer_fn(model.parameters(),lr=lr)
-        save_dir = 'models/surrogate/MLP/MSE_FFTmse/modes{}-{}/{}/'.format(params['flow'], params['fhigh'], params['lmbd'])
-        log_dir = 'runs/MSE_FFT_modes_{}-{}_lmbd{}/'.format(params['flow'], params['fhigh'], params['lmbd'])
+        #save_dir = 'models/surrogate/MLP/MSE_FFTmse/modes{}-{}/{}/'.format(params['flow'], params['fhigh'], params['lmbd'])
+        #log_dir = 'runs/MSE_FFT_modes_{}-{}_lmbd{}/'.format(params['flow'], params['fhigh'], params['lmbd'])
+        save_dir = 'models/surrogate/MLP/MSE_MRE/lmbd{}'.format(params['lmbd'])
+        log_dir = 'runs/MSE_MRE_lmbd{}/'.format(params['lmbd'])
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
@@ -35,8 +37,8 @@ def grid_search(model_fn, dataset, init_params, optimizer_fn, param_grid):
     print('Best score was %f' % results['scores'][best_idx])
 
 if __name__ == '__main__':
-    num_epochs = 1
-    hidden_size = 512
+    num_epochs = 5
+    hidden_size = [512,512,512,512]
     batch_size = 100
     x_dim = 6
     y_dim = 468
@@ -44,16 +46,19 @@ if __name__ == '__main__':
     train_size = .8
     data_filename = 'data/uniform_age_25/npz/AbdAorta_PPG.npz'
     checkpoint_file = 'models/surrogate/MLP/MSE/current_model.pt'
-    loss_fn = ls.MultipleLoss(nn.MSELoss(), ls.FftMseLoss())
+    loss_fn = ls.MultipleLoss(nn.MSELoss(), ls.mean_relative_error)
     eval_metric = ls.mean_relative_error
+    """
     params = {'lr': [1e-4],
               'flow': [0,5,8],
               'fhigh': [12,20,468],
               'lmbd': [.1,.25,.4]}
-
+    """
+    params = {'lr': [1e-4],
+              'lmbd': [0.1,0.25,0.4]}
     # todo: add hyper-parameters like learning rate, optimizer, batch size... to be read from a configuration file
     optimizer_fn = Adam
-    model_fn = models.MLP
+    model_fn = nets.MLP
     init_params = [x_dim, y_dim, hidden_size]
     # load the dataset
     xs, ys, labels = utils.load_dataset(data_filename)

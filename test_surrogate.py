@@ -1,38 +1,21 @@
 import torch
-from torch.utils.tensorboard import SummaryWriter
-import numpy as np
 from sklearn.model_selection import train_test_split
-import models
+import nets
 import utils
 import loss as ls
-
-def eval_pass(model, data_loader, loss_fn):
-    with torch.no_grad():
-        model.eval()
-        mean_loss = 0
-        for k, (x, y) in enumerate(data_loader()):
-            loss = loss_fn(y, model(x))
-            mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-    return mean_loss
-
-def test(model, xs, ys, metric):
-
-    with torch.no_grad():
-        model.eval()
-        score = metric(ys, model(xs))
-
-    print('Score on the test set is ', score)
-    return score
+from models.surrogate_MLP import test
 
 if __name__ == '__main__':
 
     #these parameters need to be the same as for the training so it's best to write them in a configuration file and laod
-    model_params = {'hidden_layer_size': 512,'input_dimension' : 6,'output_dimension': 468}
-    PATH = 'models/surrogate/MLP/current_model.pt'
+    model_params = {'hidden_layers': [512,512,512,512],'input_dimension' : 6,'output_dimension': 468}
+    PATH = 'models/surrogate/MLP/MSE/current_model.pt'
 
-    model = models.MLP(**model_params)
+    model = nets.MLP(**model_params)
     checkpoint = torch.load(PATH)
     model.load_state_dict(checkpoint['model_state_dict'])
+    train_size = checkpoint['train_size']
+    random_state = checkpoint['random_state']
     metric = ls.mean_relative_error
     # load the dataset
     xs, ys, labels = utils.load_dataset(checkpoint['data_filename'])

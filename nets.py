@@ -33,18 +33,18 @@ class INN(GraphINN):
     
 class MLP(nn.Sequential):
 
-    def __init__(self, input_dimension, output_dimension, hidden_layer_size):
+    def __init__(self, input_dimension, output_dimension, hidden_layers):
 
         self.input_dimension = input_dimension
         self.output_dimension = output_dimension
-        self.hidden_layer_size = hidden_layer_size
+        self.hidden_layers = hidden_layers
+        super().__init__(nn.Linear(input_dimension, hidden_layers[0]), nn.ReLU())
+        for i in range(len(hidden_layers)-1):
+            self.append(nn.Linear(hidden_layers[i], hidden_layers[i+1]))
+            self.append(nn.ReLU())
+        self.append(nn.Linear(hidden_layers[-1], output_dimension))
 
-        super().__init__(nn.Linear(input_dimension, hidden_layer_size),
-                      nn.ReLU(),
-                      nn.Linear(hidden_layer_size, hidden_layer_size),
-                      nn.ReLU(),
-                      nn.Linear(hidden_layer_size, hidden_layer_size),
-                      nn.ReLU(),
-                      nn.Linear(hidden_layer_size, hidden_layer_size),
-                      nn.ReLU(),
-                      nn.Linear(hidden_layer_size, output_dimension))
+
+    def forward(self, input, *more_inputs):
+        inputs = torch.cat([input, *more_inputs], dim = 1)
+        return super().forward(inputs)
