@@ -11,18 +11,15 @@ from sklearn.model_selection import train_test_split
 import torchsde
 import matplotlib.pyplot as plt
 from torch.distributions import MultivariateNormal
-from tqdm import tqdm
 
-def generate_dataset(n_samples,Sigma, random_state = 7):
-
-    random_gen = torch.random.manual_seed(random_state)
-    x = torch.randn(n_samples,xdim, generator = random_gen)
+def generate_dataset(n_samples,Sigma):
+    x = np.random.randn(n_samples,xdim)
     y = f(x)
-    noise = torch.randn(n_samples, ydim)
+    noise = np.random.randn(n_samples, ydim)
     noise = (Sigma@noise.T).T
     y+=noise
-    #x = torch.from_numpy(x)
-    #y = torch.from_numpy(y)
+    x = torch.from_numpy(x)
+    y = torch.from_numpy(y)
     return x.float(),y.float()
 
 #toy function as forward problem
@@ -52,18 +49,15 @@ def log_posterior(x, y):
     return log_p1
 
 def score_q(x,y):
-    y_res = y-(x@A.T+b)
+    y_res = y-(A@x+b)
     score_prior = -x
-    score_likelihood = (y_res@Sigma_inv.T)@A
+    score_likelihood = A.T@Sigma_inv@y_res
     return score_prior+score_likelihood
 
 #PDE of the score. In the case of an Ohrnstein-Uhlenbeck process, the hessian of f is 0
-def pde_loss(u,u_x,u_xx,u_t, f, grad_f, sigma, Hessian_f = 0.):
+def pde_loss(u,u_x,u_xx,u_t, f, grad_f, sigma, Hessian_f = 0):
 
-    fx_u = grad_f*u
-    f_ux = f*u_x
-    u_ux = u*u_x
-    return (u_t - Hessian_f - fx_u -  f_ux- .5*sigma**2*(u_xx+2*u_ux))
+    return (u_t - Hessian_f - grad_f@u - f@u_x - .5*sigma**2*(u_xx+2*u@u_x))
 
 def initial_condition_loss(u,x,y):
 
@@ -71,53 +65,53 @@ def initial_condition_loss(u,x,y):
 
 def dsm_loss(a,std,g,target, xdim):
 
-    return ((a * std + target) ** 2).view(xdim, -1).sum(1, keepdim=False) / 2
-def PINN_loss(model, x,y):
+    return ((a * std / g + target) ** 2).view(xdim, -1).sum(1, keepdim=False) / 2
+#code taken from https://colab.research.google.com/drive/120kYYBOVa1i0TD85RjlEkFjaWDxSFUx3?usp=sharing#scrollTo=YyQtV7155Nht
+class GaussianFourierProjection(nn.Module):
+  """Gaussian random features for encoding time steps."""
+  def __init__(self, embed_dim, scale=30.):
+    super().__init__()
+    # Randomly sample weights during initialization. These weights are fixed
+    # during optimization and are not trainable.
+    self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+  def forward(self, x):
+    x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
+    return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
+def PINN_loss(model, x,y):
+    """
+    pinn loss
+    """
     if model.debias:
         t_ = model.base_sde.sample_debiasing_t([x.size(0), ] + [1 for _ in range(x.ndim - 1)])
-        t_.requires_grad = True
     else:
-        t_ = torch.rand([x.size(0), ] + [1 for _ in range(x.ndim - 1)], requires_grad=True).to(x) * model.T
-        t_.requires_grad = True
-    t0 = torch.zeros_like(t_)
+        t_ = torch.rand([x.size(0), ] + [1 for _ in range(x.ndim - 1)]).to(x) * model.T
+    #todo: x_t should be 3D afaik
     x_t, target, std, g = model.base_sde.sample(t_, x, return_noise=True)
-    u = model.a(x_t, t_, y)
-    u_0 = model.a(x,t0,y)
-    #a = u*g
+    a = model.a(x_t, t_, y)
 
-    u_x = torch.autograd.grad(u.sum(), x_t, create_graph=True, retain_graph=True)[0]
-    u_xx = torch.autograd.grad(u_x.sum(), x_t,retain_graph=True)[0]
-    u_t = torch.autograd.grad(u.sum(), t_,retain_graph=True)[0]
+    u = a/g
+    u_x = torch.autograd.grad(u, x_t, create_graph=True, retain_graph=True)[0]
+    u_xx = torch.autograd.grad(u_x, x_t, retain_graph=True)[0]
+    u_t = torch.autograd.grad(u, t_)[0]
+    MSE_u = initial_condition_loss(u, x,y)+dsm_loss(a,std,g,target,x.size(0))
+    grad_f = -0.5*model.base_sde.beta(t_)
+    MSE_pde = torch.mean(pde_loss(u,u_x,u_xx, u_t, model.base_sde.f(t_,x_t), grad_f, model.base_sde.g(t_,x_t)))
 
-    MSE_u = initial_condition_loss(u_0, x,y)+dsm_loss(u,std,g,target,x.size(0))
-    grad_f = torch.ones_like(x_t)*-0.5*model.base_sde.beta(t_)
-    MSE_pde = torch.mean(pde_loss(u,u_x,u_xx, u_t, model.base_sde.f(t_,x_t), grad_f, model.base_sde.g(t_,x_t))**2, dim = 1)
-    loss = torch.mean(MSE_u+MSE_pde)
+    return MSE_u+MSE_pde
 
-    return loss
-
-def train(model,xs,ys, optim, num_epochs, batch_size=100):
+def train(model,xs,ys, optim, num_epochs):
 
     model.train()
-    prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
+        train_loader = utils.get_dataloader(xs, ys, batch_size=100)
 
-        train_loader = utils.get_dataloader(xs, ys, batch_size)
-        mean_loss = 0
         for x,y in train_loader():
 
-            x = torch.ones_like(x, requires_grad=True)*x
             loss = PINN_loss(model,x,y)
             optim.zero_grad()
             loss.backward()
             optim.step()
-            mean_loss += loss.data.item()
-
-        mean_loss /= (xs.shape[0]//batch_size)
-        prog_bar.set_description('loss: {:.4f}'.format(loss))
-        prog_bar.update()
-    prog_bar.close()
 
     return model
 
@@ -210,20 +204,19 @@ if __name__ == '__main__':
     epsilon = 1e-6
     xdim = 2
     ydim = 2
-    A = torch.randn(ydim,xdim)
-    b = torch.randn(ydim)
+    A = np.random.randn(ydim,xdim)
+    b = np.random.randn(ydim)
     scale = 2
-    Sigma = scale*torch.eye(ydim)
-    Lam = torch.eye(xdim)
-    Sigma_inv = torch.linalg.inv(Sigma+epsilon*torch.eye(ydim))
-    Sigma_y_inv = torch.linalg.inv(Sigma+A@Lam@A.T+epsilon*torch.eye(ydim))
-    mu = torch.zeros(xdim)
+    Sigma = scale*np.eye(ydim)
+    Lam = np.eye(xdim)
+    Sigma_inv = np.linalg.inv(Sigma+epsilon*np.eye(ydim))
+    Sigma_y_inv = np.linalg.inv(Sigma+A@Lam@A.T+epsilon*np.eye(ydim))
+    mu = np.zeros(xdim)
     prior = MultivariateNormal(torch.Tensor(mu),torch.Tensor(Lam))
 
-    #create data
     xs,ys = generate_dataset(n_samples=1000, Sigma = Sigma)
-    #plot_prior_pdf()
 
+    #plot_prior_pdf()
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
     n_samples = 500
     embed_dim = 2

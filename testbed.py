@@ -84,7 +84,7 @@ def train_MLP_epoch(optimizer, model, epoch_data_loader):
         mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
     return mean_loss
 
-def make_image(pred_samples,x_true, num_epochs, inds=None,):
+def make_image(pred_samples,x_true, num_epochs, inds=None):
 
     cmap = plt.cm.tab20
     range_param = 1.2
