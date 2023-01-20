@@ -123,7 +123,7 @@ def product_dict(**kwargs):
     for instance in itertools.product(*vals):
         yield dict(zip(keys, instance))
 
-def make_image(pred_samples,x_true, num_epochs, inds=None, show_plot = False, savefig = True):
+def make_image(pred_samples,x_true, num_epochs, output_dir = None, inds=None, show_plot = False, savefig = True):
 
     cmap = plt.cm.tab20
     range_param = 1.2
