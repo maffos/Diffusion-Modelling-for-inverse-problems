@@ -95,7 +95,9 @@ def pde_loss(u,u_x1, u_x2,u_xx1, u_xx2, u_t1, u_t2, f, grad_f, sigma, H_f=0.):
     l2 = (-u_t2 - H_f - (fx_u[:,1]).view(batch_size,1) - f_ux2 + .5*sigma[:,1].view(batch_size,1)**2*(third_order_term2+2*u_ux2))
     loss = torch.cat([l1,l2], dim=1)
     loss = torch.linalg.vector_norm(loss, dim=1)
+
     """
+    These are some quantities I calculated for debugging
     l = torch.linalg.vector_norm(loss, dim=1)
     l_mean = l.mean()
     f_ux1_mean = f_ux1.mean()
@@ -144,6 +146,7 @@ def PINN_loss(model,x,y):
     MSE_pde = pde_loss(u,u_x1,u_x2,u_xx1,u_xx2,u_t1,u_t2, model.base_sde.f(t_,x_t), grad_f, model.base_sde.g(t_,x_t))
 
     """
+    This was an idea to penalize if the Hessian and third order matrix are not symmetric. 
     lam = 0.1
     second_order_reg = torch.linalg.vector_norm(u_x1[:,1]-u_x2[:,0])
     third_order_reg = torch.linalg.vector_norm(u_xx11[:,1]-u_xx12[:,0])+torch.linalg.vector_norm(u_xx12[:,1]-u_xx22[:,0])+torch.linalg.vector_norm(u_xx21[:,0]-u_xx11[:,1])+torch.linalg.vector_norm(u_xx21[:,1]-u_xx22[:,0])
@@ -162,6 +165,8 @@ def PINN_loss(model,x,y):
     u_xx2_norm = torch.linalg.vector_norm(u_xx2, dim=1).mean()
     u_t1_norm = u_t1.mean()
     u_t2_norm = u_t2.mean()
+
+    #if model.debias is set to True, very low values for t may be sampled, at which the gradient will explode.
     if u_t1_norm == torch.Tensor([torch.inf]) or u_t2_norm == torch.Tensor([torch.inf]):
         print('u_t1: ', u_t1_norm)
         print('u_t2: ', u_t2_norm)
@@ -308,7 +313,6 @@ if __name__ == '__main__':
     xs,ys = generate_dataset(n_samples=1000, Sigma = Sigma)
 
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
-    n_samples = 1000
     embed_dim = 2
     net_params = {'input_dim': xdim+ydim,
                   'output_dim': xdim,
