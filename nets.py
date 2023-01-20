@@ -84,10 +84,10 @@ class TemporalMLP(nn.Module):
         self.fc5 = nn.Linear(hidden_layers[3], hidden_layers[4])
         self.fc6 = nn.Linear(hidden_layers[4], self.output_dim)
 
-    def forward(self,x,t):
+    def forward(self,x,t,y):
 
         t_embed = self.embed(t)
-        input = torch.cat([x,t_embed], dim=1)
+        input = torch.cat([x,t_embed,y], dim=1)
         assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
         x = self.fc1(input)
         x = self.relu(x)
