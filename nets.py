@@ -68,7 +68,7 @@ class TemporalMLP(MLP):
 """
 class TemporalMLP(nn.Module):
 
-    def __init__(self, input_dim, output_dim, embed_dim, hidden_layers):
+    def __init__(self, input_dim, output_dim, embed_dim, hidden_layers, activation='tanh'):
 
         super(TemporalMLP, self).__init__()
         self.input_dim = input_dim+embed_dim
@@ -76,7 +76,12 @@ class TemporalMLP(nn.Module):
         self.embed = utils.GaussianFourierProjection(embed_dim)
 
         #build the net
-        self.relu = nn.ReLU()
+        if activation in ['tanh', 'Tanh']:
+            self.act = nn.Tanh()
+        elif activation in ['relu', 'Relu', 'ReLU']:
+            self.act = nn.ReLU()
+        else:
+            raise ValueError('$s as activation function is not supported. Please choose either relu or tanh.'%activation)
         self.fc1 = nn.Linear(self.input_dim, hidden_layers[0])
         self.fc2 = nn.Linear(hidden_layers[0], hidden_layers[1])
         self.fc3 = nn.Linear(hidden_layers[1], hidden_layers[2])
@@ -90,15 +95,15 @@ class TemporalMLP(nn.Module):
         input = torch.cat([x,t_embed,y], dim=1)
         assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
         x = self.fc1(input)
-        x = self.relu(x)
+        x = self.act(x)
         x = self.fc2(x)
-        x = self.relu(x)
+        x = self.act(x)
         x = self.fc3(x)
-        x = self.relu(x)
+        x = self.act(x)
         x = self.fc4(x)
-        x = self.relu(x)
+        x = self.act(x)
         x = self.fc5(x)
-        x = self.relu(x)
+        x = self.act(x)
         x = self.fc6(x)
 
         return x
