@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from torch import nn
 
 __all__ = ['load_dataset', 'generate_dataset']
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 
 def get_dataset_names():
     return ['gaussian_ring']
@@ -94,25 +96,40 @@ def reverse_preprocessing(x, filename):
 
     x_min, x_max = get_x_minmax(filename)
     return x*(x_max-x_min)+x_min
+
 def get_dataloader(x, y, batch_size):
     perm = torch.randperm(len(x))
     x = x[perm]
     y = y[perm]
     def data_loader():
         for i in range(0, len(x), batch_size):
-            yield x[i:i + batch_size], y[i:i + batch_size]
+            yield x[i:i + batch_size].to(device), y[i:i + batch_size].to(device)
 
     return data_loader
     
-def get_dataloader_noise(x_train, y_train, sigma):
+def get_dataloader_noise(x_train, y_train, sigma, batch_size):
+
     perm = torch.randperm(len(x_train))
     x = x_train[perm]
     y = y_train[perm]
-    y = y + sigma*torch.randn_like(y)
-    batch_size = 100
+    y += sigma*torch.randn_like(y)
+
     def epoch_data_loader():
         for i in range(0, len(x), batch_size):
-            yield x[i:i + batch_size], y[i:i + batch_size], y_train[i:i+batch_size]
+            yield x[i:i + batch_size].to(device), y[i:i + batch_size].to(device)
+
+    return epoch_data_loader
+
+def get_dataloader_scatterometry(x_train,y_train,sigma,batch_size,a):
+
+    perm = torch.randperm(len(x_train))
+    x = x_train[perm]
+    y = y_train[perm]
+    y += torch.randn_like(y) * sigma + torch.randn_like(y) * a * y
+
+    def epoch_data_loader():
+        for i in range(0, 8 * batch_size, batch_size):
+            yield x[i:i + batch_size], y[i:i + batch_size]
 
     return epoch_data_loader
 

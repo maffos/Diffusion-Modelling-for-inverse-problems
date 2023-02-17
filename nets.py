@@ -34,21 +34,23 @@ class INN(GraphINN):
     
 class MLP(nn.Sequential):
 
-    def __init__(self, input_dimension, output_dimension, hidden_layers):
+    def __init__(self, input_dim, output_dim, hidden_layers):
 
-        self.input_dimension = input_dimension
-        self.output_dimension = output_dimension
+        self.input_dim = input_dim
+        self.output_dim = output_dim
         self.hidden_layers = hidden_layers
-        super().__init__(nn.Linear(input_dimension, hidden_layers[0]), nn.ReLU())
+        super().__init__(nn.Linear(input_dim, hidden_layers[0]), nn.ReLU())
         for i in range(len(hidden_layers)-1):
             self.append(nn.Linear(hidden_layers[i], hidden_layers[i+1]))
             self.append(nn.ReLU())
-        self.append(nn.Linear(hidden_layers[-1], output_dimension))
+        self.append(nn.Linear(hidden_layers[-1], output_dim))
 
-    def forward(self, input, *more_inputs):
-        inputs = torch.cat([input, *more_inputs], dim = 1)
-        inputs = torch.flatten(inputs, start_dim= 1)
-        return super().forward(inputs)
+    def forward(self, x,t,y):
+        #inputs = torch.cat([input] + list(more_inputs), dim = 1)
+        #inputs = torch.flatten(inputs, start_dim= 1)
+        input = torch.cat([x, t.view(len(x),1), y], dim=1)
+        assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
+        return super().forward(input)
 
 
 
@@ -103,6 +105,43 @@ class TemporalMLP(nn.Module):
         x = self.fc4(x)
         x = self.act(x)
         x = self.fc5(x)
+        x = self.act(x)
+        x = self.fc6(x)
+
+        return x
+
+class TemporalMLP_small(nn.Module):
+
+    def __init__(self, input_dim, output_dim, embed_dim, hidden_layers, activation='sigmoid'):
+
+        super(TemporalMLP_small, self).__init__()
+        self.input_dim = input_dim + embed_dim
+        self.output_dim = output_dim
+        self.embed = utils.GaussianFourierProjection(embed_dim)
+
+        # build the net
+        if activation in ['tanh', 'Tanh']:
+            self.act = nn.Tanh()
+        elif activation in ['Sigmoid', 'sigmoid']:
+            self.act = nn.Sigmoid()
+        elif activation in ['relu', 'Relu', 'ReLU']:
+            self.act = nn.ReLU()
+        else:
+            raise ValueError(
+                '$s as activation function is not supported. Please choose one of relu, tanh or sigmoid.' % activation)
+        self.fc1 = nn.Linear(self.input_dim, hidden_layers[0])
+        self.fc2 = nn.Linear(hidden_layers[0], hidden_layers[1])
+
+        self.fc6 = nn.Linear(hidden_layers[1], self.output_dim)
+
+    def forward(self, x, t, y):
+
+        t_embed = self.embed(t)
+        input = torch.cat([x, t_embed, y], dim=1)
+        assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
+        x = self.fc1(input)
+        x = self.act(x)
+        x = self.fc2(x)
         x = self.act(x)
         x = self.fc6(x)
 
