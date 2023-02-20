@@ -104,7 +104,7 @@ def dsm_loss_fn(s,std,target,xdim):
 
 #the difference between this and ermon_loss is that ermon_loss does not include the initial and boundary condition.
 #doesn't work yet
-def PINN_loss(model,x,y, lam1 = 1., lam2 = 1., lam3 = 1.) :
+def PINN_loss2(model,x,y, lam1 = 1., lam2 = 1., lam3 = 1.) :
 
     t_ = sample_t(model,x)
     batch_size,xdim = x.shape
@@ -124,9 +124,6 @@ def PINN_loss(model,x,y, lam1 = 1., lam2 = 1., lam3 = 1.) :
     x_collocation_loss = dsm_loss_fn(s, std, target, x.size(0))
     boundary_condition_loss = boundary_condition_loss_(s_T, x_T)
 
-    #print('Initial condition loss: ', initial_condition_loss.mean().item())
-    #print('DSM loss: ', x_collocation_loss.mean().item())
-    #print('Boundary condition: ', boundary_condition_loss.mean().item())
     MSE_u = lam2*initial_condition_loss + lam3*boundary_condition_loss + x_collocation_loss
 
     s_x1 = torch.autograd.grad(s[:, 0].sum(), x_t, create_graph=True, retain_graph=True)[0]
@@ -142,7 +139,7 @@ def PINN_loss(model,x,y, lam1 = 1., lam2 = 1., lam3 = 1.) :
     return loss
 
 #calculates PINN loss without x-collocations term, e.g. no dsm loss included
-def PINN_loss2(model,x,y, lam1 = 1., lam2 = 1., lam3=1.):
+def PINN_loss(model,x,y, lam1 = 1., lam2 = 1., lam3=1.):
 
     t_= (sample_t(model,x)).to(x.device)
     batch_size, xdim = x.shape

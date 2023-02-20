@@ -1,7 +1,8 @@
-import torch
 from libraries.sdeflow_light.lib import sdes
 from nets import TemporalMLP_small,MLP
 
+import torch
+from torch import nn
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def create_diffusion_model(xdim, ydim, embed_dim, hidden_layers):
@@ -25,20 +26,6 @@ def create_diffusion_model2(xdim, ydim,hidden_layers):
     reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=False)
     return reverse_process
 
-def train_diffusion_epoch(optimizer, model, epoch_data_loader):
-    mean_loss = 0
-    for k, (x, y) in enumerate(epoch_data_loader()):
-
-        loss = model.dsm(x,y).mean()
-
-        optimizer.zero_grad()
-        loss.backward()
-
-        optimizer.step()
-
-        mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-    return mean_loss
-
 def get_grid(sde, cond1, xdim,ydim, num_samples = 2000, num_steps=200, transform=None,
              mean=0, std=1):
     cond = torch.zeros(num_samples, ydim).to(cond1.device)
@@ -56,3 +43,13 @@ def get_grid(sde, cond1, xdim,ydim, num_samples = 2000, num_steps=200, transform
 
     y0 = y0.data.cpu().numpy()
     return y0
+
+def sample_t(model,x):
+
+    if model.debias:
+        t_ = model.base_sde.sample_debiasing_t([x.size(0), ] + [1 for _ in range(x.ndim - 1)])
+        t_.requires_grad = True
+    else:
+        t_ = 1e-5+torch.rand([x.size(0), ] + [1 for _ in range(x.ndim - 1)], requires_grad=True).to(x) * model.T
+
+    return t_
