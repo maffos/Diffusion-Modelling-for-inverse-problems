@@ -21,7 +21,8 @@ def train_epoch(optimizer, loss_fn, model, epoch_data_loader):
     for k, (x, y) in enumerate(epoch_data_loader()):
 
         t = sample_t(model,x)
-        loss = loss_fn(model,x,y,t)
+        loss = loss_fn(model,x,t,y)
+        #loss = model.dsm(x,y).mean()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -153,11 +154,12 @@ if __name__ == '__main__':
     x_test = torch.rand(n_samples_y, xdim, device=device) * 2 - 1
     y_test = forward_model(x_test)
     y_test = y_test + b * torch.randn_like(y_test) + y_test * a * torch.randn_like(y_test)
-    n_epochs = 10
+    n_epochs = 200
 
     hidden_layers = [512,512]
     model = create_diffusion_model2(xdim,ydim,hidden_layers)
     optimizer = Adam(model.a.parameters())
-    loss_fn = ErmonLoss(xdim)
+    loss_fn = ErmonLoss(lam=.1)
+    #loss_fn = DSMLoss()
     model = train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir)
     evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=5, n_plots=1)

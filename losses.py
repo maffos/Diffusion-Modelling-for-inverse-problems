@@ -73,15 +73,15 @@ class MultipleLoss(nn.Module):
 
 class DSMLoss(nn.Module):
     
-    def __init__(self,xdim):
+    def __init__(self):
 
         super(DSMLoss,self).__init__()
-        self.xdim = xdim
         self.name = 'DSMLoss'
                  
-    def forward(self,s,std,target):
+    def forward(self,s, std,target):
 
-        return ((s * std + target) ** 2).view(self.xdim, -1).sum(1, keepdim=False) / 2
+        batch_size = s.shape[0]
+        return ((s * std + target) ** 2).view(batch_size, -1).sum(1, keepdim=False) / 2
 
 class ScoreFPELoss(nn.Module):
 
@@ -95,21 +95,21 @@ class ScoreFPELoss(nn.Module):
         s_t = torch.autograd.grad(s,x_t,grad_outputs=torch.ones_like(s), create_graph = True, retain_graph=True)[0]
         divx_s =divergence(s,x_t)
         loss = torch.autograd.grad(divx_s.sum() + torch.sum(s ** 2), x_t, retain_graph=True)[0]
-        loss = torch.sum((s_t - .5 * beta * (s + loss)) ** 2, dim=1).view(batch_size, 1)
-
+        #loss = torch.sum((s_t - .5 * beta * (s + loss)) ** 2, dim=1).view(batch_size, 1)
+        loss = torch.mean(s_t - .5 * beta * (s + loss), dim = 1).view(batch_size, 1)
         return loss
 
 class ErmonLoss(nn.Module):
 
-    def __init__(self, xdim, lam = 1.):
+    def __init__(self, lam = 1.):
 
         super(ErmonLoss,self).__init__()
         self.lam = lam
-        self.dsm_loss = DSMLoss(xdim)
+        self.dsm_loss = DSMLoss()
         self.pde_loss = ScoreFPELoss()
         self.name = 'ErmonLoss'
 
-    def forward(self,model,x,y,t):
+    def forward(self,model,x,t,y):
 
         x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
         s = model.a(x_t, t,y)/g
@@ -160,7 +160,7 @@ class PINNLoss2(PINNLoss):
     def __init__(self,initial_condition,boundary_condition, xdim, lam1 = 1., lam2 = 1., lam3 = 1.):
 
         super(PINNLoss2, self).__init__(initial_condition,boundary_condition, lam1, lam2, lam3)
-        self.dsm_loss = DSMLoss(xdim)
+        self.dsm_loss = DSMLoss()
         self.pde_loss = ScoreFPELoss()
         self.name = 'PINNLoss2'
 
@@ -184,9 +184,9 @@ class PINNLoss2(PINNLoss):
 #calculates PINN loss without boundary condition term
 class PINNLoss3(ErmonLoss):
 
-    def __init__(self, xdim, initial_condition, lam1 = 1., lam2 = 1.):
+    def __init__(self,initial_condition, lam1 = 1., lam2 = 1.):
 
-        super(PINNLoss3, self).__init__(xdim, lam1)
+        super(PINNLoss3, self).__init__(lam1)
         self.lam2 = lam2
         self.initial_condition = initial_condition
         self.name = 'PINNLoss3'
