@@ -1,4 +1,4 @@
-from libraries.sdeflow_light.lib import sdes
+from include.sdeflow_light.lib import sdes
 from nets import TemporalMLP_small,MLP
 
 import torch

@@ -92,11 +92,11 @@ class ScoreFPELoss(nn.Module):
     def forward(self, s, x_t, t, beta):
         batch_size = x_t.shape[0]
 
-        s_t = torch.autograd.grad(s,x_t,grad_outputs=torch.ones_like(s), create_graph = True, retain_graph=True)[0]
+        s_t = torch.autograd.grad(s,t,grad_outputs=torch.ones_like(s), create_graph = True, retain_graph=True)[0]
         divx_s =divergence(s,x_t)
         loss = torch.autograd.grad(divx_s.sum() + torch.sum(s ** 2), x_t, retain_graph=True)[0]
-        #loss = torch.sum((s_t - .5 * beta * (s + loss)) ** 2, dim=1).view(batch_size, 1)
-        loss = torch.mean(s_t - .5 * beta * (s + loss), dim = 1).view(batch_size, 1)
+        loss = torch.mean((s_t - .5 * beta * (s + loss)) ** 2, dim=1).view(batch_size, 1)
+        #loss = torch.mean(torch.abs(s_t - .5 * beta * (s + loss)), dim = 1).view(batch_size, 1)
         return loss
 
 class ErmonLoss(nn.Module):
@@ -115,16 +115,18 @@ class ErmonLoss(nn.Module):
         s = model.a(x_t, t,y)/g
         beta = model.base_sde.beta(t)
 
-        loss = self.dsm_loss(s,std,target)+self.lam*self.pde_loss(s,x_t,t,beta)
-        return loss.mean()
+        MSE_u = self.dsm_loss(s,std,target)
+        MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
+        loss = MSE_u+MSE_pde
+        return loss.mean(), {'DSM-Loss': MSE_u.mean(), 'PDE-Loss': MSE_pde.mean()}
 
 #calculates PINN loss without x-collocations term, e.g. no dsm loss included
 class PINNLoss(nn.Module):
 
-    def __init__(self, initial_condition, boundary_condition, lam1 = 1., lam2 = 1., lam3=1.):
+    def __init__(self, initial_condition, boundary_condition, lam = 1., lam2 = 1., lam3=1.):
 
         super(PINNLoss,self).__init__()
-        self.lam1 = lam1
+        self.lam = lam
         self.lam2 = lam2
         self.lam3 = lam3
         self.initial_condition = initial_condition
@@ -132,9 +134,9 @@ class PINNLoss(nn.Module):
         self.pde_loss = ScoreFPELoss()
         self.name = 'PinnLoss'
 
-    def forward(self, model,x,y,t):
+    def forward(self, model,x,t,y):
 
-        batch_size, xdim = x.shape
+        batch_size = x.shape[0]
         x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
         x_t = x_t.to(x.device)
         t0 = torch.zeros_like(t).to(x.device)
@@ -148,23 +150,28 @@ class PINNLoss(nn.Module):
         s = model.a(x_t, t, y) / g
         s_T = model.a(x_T, T, y)/g_T
 
-        MSE_u = self.lam2 * self.initial_condition(s_0,x,y) + self.lam3 * self.boundary_condition(s_T, x_T)
-        loss = torch.mean(MSE_u + self.lam1 * self.pde_loss(s,x_t,t,beta))
+        initial_condition_loss = self.lam2*torch.mean((s_0-self.initial_condition(x,y))**2, dim=1).view(batch_size,1)
+        boundary_condition_loss = self.lam3*torch.mean((s_T-self.boundary_condition(x_T))**2, dim=1).view(batch_size,1)
+        MSE_u = initial_condition_loss+boundary_condition_loss
+        MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
+        loss = torch.mean(MSE_u + MSE_pde)
         
-        return loss
+        return loss, {'PDE-Loss':MSE_pde.mean(), 'Initial Condition':initial_condition_loss.mean(), 'Boundary Condition':boundary_condition_loss.mean()}
     
 #the difference between this and ermon_loss is that ermon_loss does not include the initial and boundary condition.
 #doesn't work yet
 class PINNLoss2(PINNLoss):
 
-    def __init__(self,initial_condition,boundary_condition, xdim, lam1 = 1., lam2 = 1., lam3 = 1.):
+    def __init__(self,initial_condition,boundary_condition, lam = 1., lam2 = 1., lam3 = 1.):
 
-        super(PINNLoss2, self).__init__(initial_condition,boundary_condition, lam1, lam2, lam3)
+        super(PINNLoss2, self).__init__(initial_condition,boundary_condition, lam, lam2, lam3)
         self.dsm_loss = DSMLoss()
         self.pde_loss = ScoreFPELoss()
         self.name = 'PINNLoss2'
 
-    def forward(self, model,x,y,t):
+    def forward(self, model,x,t,y):
+
+        batch_size= x.shape[0]
         x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
         t0 = torch.zeros_like(t)
         T = torch.ones_like(t)
@@ -176,23 +183,32 @@ class PINNLoss2(PINNLoss):
         s_T = model.a(x_T, T, y)/g_T
         s = model.a(x_t, t,y)/g
 
-        MSE_u = self.lam2*self.initial_condition(s_0,x,y) + self.lam3*self.boundary_condition(s_T,x_T) + self.dsm_loss(s,std,target)
-        loss = torch.mean(MSE_u+self.lam1*self.pde_loss(s,x_t,t,beta))
+        initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
+            batch_size, 1)
+        boundary_condition_loss = self.lam3 * torch.mean((s_T - self.boundary_condition(x_T)) ** 2, dim=1).view(
+            batch_size, 1)
+        dsm_loss = self.dsm_loss(s, std, target)
+        MSE_u = initial_condition_loss + boundary_condition_loss+dsm_loss
+        MSE_pde = self.lam * self.pde_loss(s, x_t, t, beta)
+        loss = torch.mean(MSE_u + MSE_pde)
 
-        return loss
+        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(),
+                      'Boundary Condition': boundary_condition_loss.mean(), 'DSM-Loss': dsm_loss.mean()}
+
 
 #calculates PINN loss without boundary condition term
 class PINNLoss3(ErmonLoss):
 
-    def __init__(self,initial_condition, lam1 = 1., lam2 = 1.):
+    def __init__(self,initial_condition, lam = 1., lam2 = 1.):
 
-        super(PINNLoss3, self).__init__(lam1)
+        super(PINNLoss3, self).__init__(lam)
         self.lam2 = lam2
         self.initial_condition = initial_condition
         self.name = 'PINNLoss3'
 
-    def forward(self,model,x,y,t):
+    def forward(self,model,x,t,y):
 
+        batch_size = x.shape[0]
         x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
         t0 = torch.zeros_like(t)
         g_0 = model.base_sde.g(t0, x_t)
@@ -201,7 +217,11 @@ class PINNLoss3(ErmonLoss):
         s_0 = model.a(x, t0, y)/g_0
         s = model.a(x_t, t,y)/g
 
-        MSE_u = self.lam2*self.initial_condiion(s_0,x,y) + self.dsm_loss(s,std,target)
-        loss = torch.mean(MSE_u+self.lam*self.pde_loss(s,x_t,t,beta))
+        initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
+            batch_size, 1)
+        dsm_loss = self.dsm_loss(s, std, target)
+        MSE_u = initial_condition_loss + dsm_loss
+        MSE_pde = self.lam * self.pde_loss(s, x_t, t, beta)
+        loss = torch.mean(MSE_u + MSE_pde)
 
-        return loss
+        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM-Loss': dsm_loss.mean()}

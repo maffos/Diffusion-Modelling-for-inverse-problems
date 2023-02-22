@@ -131,3 +131,16 @@ dmypy.json
 #directories
 data/
 runs/
+include/
+
+#logs
+*.tfevents.*
+
+#plots
+*.png
+
+#checkpoints
+*.pt
+
+#compressed folders
+*.tar.gz

@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 from sbi.analysis import pairplot
 from models.diffusion import *
-from models.SNF import anneal_to_energy
+from models.SNF import anneal_to_energy, energy_grad
 from utils import *
 from losses import *
 import scipy
@@ -10,6 +10,7 @@ from tqdm import tqdm
 import os
 import torch
 from torch.optim import Adam
+from torch.utils.tensorboard import SummaryWriter
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # mcmc parameters for "discovering" the ground truth
@@ -18,24 +19,41 @@ METR_STEPS = 1000
 
 def train_epoch(optimizer, loss_fn, model, epoch_data_loader):
     mean_loss = 0
+    logger_info = {}
+
     for k, (x, y) in enumerate(epoch_data_loader()):
 
         t = sample_t(model,x)
         loss = loss_fn(model,x,t,y)
+
+        if isinstance(loss, tuple):
+            loss_info = loss[1]
+            loss = loss[0]
+            for key,value in loss_info.items():
+                try:
+                    logger_info[key] = logger_info[key] * k / (k + 1) + value.item() / (k + 1)
+                except:
+                    logger_info[key] = 0
+                    logger_info[key] = logger_info[key] * k / (k + 1) + value.item() / (k + 1)
         #loss = model.dsm(x,y).mean()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-    return mean_loss
+    return mean_loss, logger_info
 
-def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, batch_size, save_dir):
+def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, batch_size, save_dir, log_dir):
+
+    logger = SummaryWriter(log_dir)
     prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
         data_loader = get_epoch_data_loader(batch_size, forward_model, a, b, lambd_bd)
-        loss = train_epoch(optimizer, loss_fn, model, data_loader)
+        loss,logger_info = train_epoch(optimizer, loss_fn, model, data_loader)
         prog_bar.set_description('determ diffusion loss:{:.3f}'.format(loss))
+        logger.add_scalar('Train/Loss', loss, i)
+        for key,value in logger_info.items():
+            logger.add_scalar('Train/'+key, value, i)
         prog_bar.update()
     prog_bar.close()
     
@@ -87,8 +105,8 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
                 nll_sum_mcmc += mcmc_energy(torch.from_numpy(x_true).to(device)).sum() / n_samples_x
                 nll_sum_diffusion += mcmc_energy(torch.from_numpy(x_pred).to(device)).sum() / n_samples_x
 
+            # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
             if i in plot_y:
-                # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
                 fig, ax = pairplot([x_true])
                 fig.suptitle('N=%d samples from the posterior with mcmc' % (n_samples_x))
                 fname = os.path.join(out_dir, 'posterior-mcmc-%d.png' % i)
@@ -145,21 +163,29 @@ if __name__ == '__main__':
     xdim = 3
     ydim = 23
 
-    out_dir = 'results/diffusion'
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-    train_dir = '.'
-
     n_samples_y = 10
+    n_samples_x = 5
     x_test = torch.rand(n_samples_y, xdim, device=device) * 2 - 1
     y_test = forward_model(x_test)
     y_test = y_test + b * torch.randn_like(y_test) + y_test * a * torch.randn_like(y_test)
     n_epochs = 200
 
+    score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,a,b,y,lambd_bd))[0]
+    score_prior = lambda x: -x
+
     hidden_layers = [512,512]
     model = create_diffusion_model2(xdim,ydim,hidden_layers)
-    optimizer = Adam(model.a.parameters())
-    loss_fn = ErmonLoss(lam=.1)
-    #loss_fn = DSMLoss()
-    model = train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir)
-    evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=5, n_plots=1)
+    optimizer = Adam(model.a.parameters(), lr=1e-4)
+    #loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition = score_prior, lam=1.,lam2=.1,lam3=.1)
+    loss_fn = ErmonLoss(lam=10)
+
+    train_dir = os.path.join(loss_fn.name, 'lam=10')
+    log_dir = os.path.join(train_dir, 'logs')
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    out_dir = os.path.join(train_dir, 'results')
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    model = train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir, log_dir = log_dir)
+    evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=n_samples_x, n_plots=1)
