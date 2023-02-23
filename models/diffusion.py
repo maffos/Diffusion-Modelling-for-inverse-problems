@@ -13,7 +13,7 @@ def create_diffusion_model(xdim, ydim, embed_dim, hidden_layers):
                   'embed_dim': embed_dim}
     forward_process = sdes.VariancePreservingSDE()
     score_net = TemporalMLP_small(**net_params).to(device)
-    reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=False)
+    reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=True)
     return reverse_process
 
 def create_diffusion_model2(xdim, ydim,hidden_layers):
