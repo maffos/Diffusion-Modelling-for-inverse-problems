@@ -53,3 +53,52 @@ def sample_t(model,x):
         t_ = torch.rand([x.size(0), ] + [1 for _ in range(x.ndim - 1)], requires_grad=True).to(x) * model.T
 
     return t_
+
+"""
+class SDE(nn.Module):
+
+    def __init__(self, net, forward_sde, xdim, ydim, sde_type, noise_type='diagonal', T=1, t0=0):
+        super(SDE, self).__init__()
+        self.net = net
+        self.forward_sde = forward_sde
+        self.T = T
+        self.t0 = t0
+        self.xdim = xdim
+        self.ydim = ydim
+        self.sde_type = sde_type
+        self.noise_type = noise_type
+
+    #x and y are passed as one tensor to be compatible with sdeint
+    def f(self, t, inputs, lmbd = 0.):
+        #unpack x and y from the inputs to pass them to the net
+        x_t = inputs[:,:xdim]
+        y = inputs[:,-ydim:]
+        if t.ndim <= 1:
+            t = torch.full((x_t.shape[0], 1), t)
+        f_x = (1. - 0.5 * lmbd) * self.forward_sde.g(self.T - t, x_t) * self.net(x_t, self.T - t, y) - \
+            self.forward_sde.f(self.T - t, x_t)
+        return torch.cat([f_x,y],dim=1)
+    def g(self, t, x_t, lmbd=0.):
+        return (1. - lmbd) ** 0.5 * self.forward_sde.g(self.T - t, x_t)
+
+def sample(model, y, x_T=None, dt=0.005, t0=0.,t1=1., n_samples = 500):
+
+    :param model: (Object) Object of class that implements functions f and g as drift and diffusion coefficient.
+    :param y: (Tensor) of shape (1,ydim)
+    :param x_T: (Tensor) of shape (n_samples, xdim)
+    :param dt: (float) Timestep to integrate
+    :param t0: (scalar) Start time. Default 0.
+    :param t1: (scalar) End Time. Default 1.
+    :param n_samples: (int) Number samples to draw.
+    :return:    (Tensor:(n_samples,xdim)) Samples from the posterior.
+    model.eval()
+    with torch.no_grad():
+        x_T = torch.randn((n_samples, model.xdim)) if x_T is None else x_T
+        t = torch.linspace(t0,t1,int((t1-t0)/dt))
+        #concatenate x and y to use with sdeint
+        y = y.repeat(n_samples,1)
+        xy = torch.concat([x_T,y],dim=1)
+        x_pred = torchsde.sdeint(model, xy, t, dt=dt)[-1,:,:]
+
+    return x_pred[:,:xdim]
+"""
