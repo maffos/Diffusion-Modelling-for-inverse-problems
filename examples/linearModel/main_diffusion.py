@@ -73,7 +73,7 @@ def get_posterior(y):
 def score_posterior(x,y):
     y_res = y-(x@A.T+b)
     score_prior = -x
-    score_likelihood = (y_res@Sigma_inv.T)@A
+    score_likelihood = y_res@Sigma_inv@A.T
     return score_prior+score_likelihood
 
 def log_plot(dist):
@@ -91,11 +91,15 @@ def log_plot(dist):
     plt.title('Prior Distribution')
     plt.show()
 
-def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size=1000):
+def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size=1000, debug = False):
 
     model.train()
     logger = SummaryWriter(log_dir)
-
+    if debug:
+        #track the minimum sampled t for debugging
+        t_min = torch.inf
+        min_epoch = 0
+        ts = []
     prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
 
@@ -107,6 +111,11 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
 
             x = torch.ones_like(x, requires_grad=True)*x
             t = sample_t(model,x)
+            if debug:
+                ts+=t.flatten().tolist()
+                if torch.min(t) < t_min:
+                    t_min = torch.min(t)
+                    min_epoch = i
             loss,loss_info = loss_fn(model,x,t,y)
             mean_loss += loss.data.item()
             for key,value in loss_info.items():
@@ -114,7 +123,11 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
                     logger_info[key] +=value.item()
                 except:
                     logger_info[key] = value.item()
-
+            if debug:
+                if torch.isnan(loss):
+                    for key,value in loss_info.items():
+                        print(key + ':' + str(value))
+                    raise ValueError('Loss is nan, min sampled t was {}. Minimal t during training was {} in epoch {}. Current Epoch: {}'.format(torch.min(t),t_min, min_epoch, i))
             optim.zero_grad()
             loss.backward()
             optim.step()
@@ -126,16 +139,20 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
         logger.add_scalar('Train/Loss', mean_loss, i)
         for key, value in logger_info.items():
             logger.add_scalar('Train/' + key, value, i)
-        logger.add_scalar('Loss/train', mean_loss, i)
         prog_bar.set_description('loss: {:.4f}'.format(loss))
         prog_bar.update()
     prog_bar.close()
 
     current_model_path = os.path.join(save_dir, 'current_model.pt')
-
+    if debug:
+        print('Minimal t during training was %f'%t_min)
+        plt.hist(ts, bins=100)
+        plt.title('Histogram of sampled ts (N=%d)'%num_epochs*100000)
+        plt.xlabel('t')
+        plt.savefig(os.path.join(save_dir, 'ts.png'))
+        plt.show()
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-
     torch.save(model.a.state_dict(), current_model_path)
     return model
 
@@ -158,34 +175,31 @@ def evaluate(model, xs,ys, save_dir, n_samples = 2000, n_plots = 10):
         plot_ys = np.random.choice(ys.shape[0], size=n_plots,replace=False)
         prog_bar = tqdm(total=len(xs))
         for i,y in enumerate(ys):
+            posterior = get_posterior(y)
+            x_pred = get_grid(model.to(device), y.to(device), xdim=2, ydim=2, num_samples=n_samples)
 
             if i in plot_ys:
-                posterior = get_posterior(ys[0])
                 # log_plot(prior)
                 # fig, ax = conditional_pairplot(likelihood, condition=xs[0], limits=[[-3, 3], [-3, 3]])
                 # fig.suptitle('Likelihood at x=(%.2f,%.2f)'%(xs[0,0],xs[0,1]))
                 # fig.show()
-                fig, ax = conditional_pairplot(posterior, condition=ys[0], limits=[[-3, 3], [-3, 3]])
+                fig, ax = conditional_pairplot(posterior, condition=y, limits=[[-3, 3], [-3, 3]])
                 fig.suptitle('Posterior at y=(%.2f,%.2f)' % (y[0], y[1]))
-                fname = os.path.join(save_dir, 'posterior-diffusion%d.png'%i)
+                fname = os.path.join(save_dir, 'posterior-true%d.png'%i)
                 plt.savefig(fname)
                 plt.close()
                 # x_pred = sample(model, y=ys[0], dt = .005, n_samples=n_samples)
-                x_pred = get_grid(model.to(device), y.to(device), xdim=2, ydim=2, num_samples=n_samples)
                 fig, ax = pairplot([x_pred], limits=[[-3, 3], [-3, 3]])
                 fig.suptitle('N=%d samples from the posterior at y=(%.2f,%.2f)' % (n_samples, y[0], y[1]))
                 fname = os.path.join(save_dir, 'posterior-diffusion%d.png'%i)
                 plt.savefig(fname)
                 plt.close()
 
-            # calculate negative log likelihood and KL-Div of samples on test set
-            posterior = get_posterior(y)
-            x_predict = get_grid(model,y,xdim=2,ydim=2, num_samples=n_samples)
             x_true = posterior.sample((n_samples,))
-            nll_sample += -torch.mean(posterior.log_prob(torch.from_numpy(x_predict)))
+            nll_sample += -torch.mean(posterior.log_prob(torch.from_numpy(x_pred)))
             #calculate nll of true samples from posterior for reference
             nll_true += -torch.mean(posterior.log_prob(x_true))
-            kl_div += nn.functional.kl_div(torch.from_numpy(x_predict), x_true).mean()
+            kl_div += nn.functional.kl_div(torch.from_numpy(x_pred), x_true).mean()
             prog_bar.set_description('NLL samples: %.4f NLL true %.4f'%(nll_sample,nll_true))
             prog_bar.update()
 
@@ -207,9 +221,10 @@ if __name__ == '__main__':
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
     model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
     loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition=lambda x: -x)
+    #loss_fn = ErmonLoss(lam=10)
     optimizer = Adam(model.a.parameters(), lr = 1e-4)
 
-    train_dir = os.path.join(loss_fn.name, 'lam=1')
+    train_dir = os.path.join(loss_fn.name, 'L1','lam=10')
     out_dir = os.path.join(train_dir, 'results')
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -219,7 +234,7 @@ if __name__ == '__main__':
     os.makedirs(log_dir)
 
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=100)
+    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=1000)
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
-    evaluate(model, x_test, y_test, out_dir, n_samples = 3000, n_plots=2)
+    evaluate(model, x_test[:100], y_test[:100], out_dir, n_samples = 10000, n_plots=10)

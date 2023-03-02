@@ -17,7 +17,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 NOISE_STD_MCMC = 0.5
 METR_STEPS = 1000
 
-def train_epoch(optimizer, loss_fn, model, epoch_data_loader):
+def train_epoch(optimizer, loss_fn, model, epoch_data_loader, t_min):
     mean_loss = 0
     logger_info = {}
 
@@ -25,7 +25,6 @@ def train_epoch(optimizer, loss_fn, model, epoch_data_loader):
 
         t = sample_t(model,x)
         loss = loss_fn(model,x,t,y)
-
         if isinstance(loss, tuple):
             loss_info = loss[1]
             loss = loss[0]
@@ -35,31 +34,41 @@ def train_epoch(optimizer, loss_fn, model, epoch_data_loader):
                 except:
                     logger_info[key] = 0
                     logger_info[key] = logger_info[key] * k / (k + 1) + value.item() / (k + 1)
+
+        if torch.min(t) < t_min:
+            t_min = torch.min(t)
+        if torch.isnan(loss):
+            for key, value in loss_info.items():
+                print(key + ':' + str(value))
+            raise ValueError(
+                'Loss is nan, min sampled t was %f. Minimal t during training was %f' % (torch.min(t), t_min))
         #loss = model.dsm(x,y).mean()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-    return mean_loss, logger_info
+    return mean_loss, logger_info, t_min
 
 def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, batch_size, save_dir, log_dir):
 
     logger = SummaryWriter(log_dir)
+    #track the smallest t during training for debugging
+    t_min = torch.inf
     prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
         data_loader = get_epoch_data_loader(batch_size, forward_model, a, b, lambd_bd)
-        loss,logger_info = train_epoch(optimizer, loss_fn, model, data_loader)
+        loss,logger_info, t_min = train_epoch(optimizer, loss_fn, model, data_loader, t_min)
         prog_bar.set_description('determ diffusion loss:{:.3f}'.format(loss))
         logger.add_scalar('Train/Loss', loss, i)
         for key,value in logger_info.items():
             logger.add_scalar('Train/'+key, value, i)
         prog_bar.update()
     prog_bar.close()
-    
+
+    print('Minimal t during training was %f'%t_min)
     if not os.path.isdir(save_dir):
         os.mkdir(save_dir)
-
     chkpnt_file = os.path.join(save_dir, 'diffusion.pt')
     torch.save(model.a.state_dict(), chkpnt_file)
 
@@ -163,12 +172,12 @@ if __name__ == '__main__':
     xdim = 3
     ydim = 23
 
-    n_samples_y = 10
-    n_samples_x = 5
+    n_samples_y = 50
+    n_samples_x = 5000
     x_test = torch.rand(n_samples_y, xdim, device=device) * 2 - 1
     y_test = forward_model(x_test)
     y_test = y_test + b * torch.randn_like(y_test) + y_test * a * torch.randn_like(y_test)
-    n_epochs = 200
+    n_epochs = 2000
 
     score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,a,b,y,lambd_bd))[0]
     score_prior = lambda x: -x
@@ -176,10 +185,10 @@ if __name__ == '__main__':
     hidden_layers = [512,512]
     model = create_diffusion_model2(xdim,ydim,hidden_layers)
     optimizer = Adam(model.a.parameters(), lr=1e-4)
-    #loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition = score_prior, lam=1.,lam2=.1,lam3=.1)
-    loss_fn = ErmonLoss(lam=10)
+    #loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition = score_prior)
+    loss_fn = ErmonLoss(lam=.1)
 
-    train_dir = os.path.join(loss_fn.name, 'lam=10')
+    train_dir = os.path.join(loss_fn.name, 'lam=.1')
     log_dir = os.path.join(train_dir, 'logs')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -188,4 +197,4 @@ if __name__ == '__main__':
         os.makedirs(out_dir)
 
     model = train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir, log_dir = log_dir)
-    evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=n_samples_x, n_plots=1)
+    #evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=n_samples_x, n_plots=10)

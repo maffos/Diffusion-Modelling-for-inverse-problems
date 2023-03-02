@@ -44,14 +44,15 @@ def get_grid(sde, cond1, xdim,ydim, num_samples = 2000, num_steps=200, transform
     y0 = y0.data.cpu().numpy()
     return y0
 
-def sample_t(model,x):
+def sample_t(model,x, eps = 1e-4):
 
     if model.debias:
         t_ = model.base_sde.sample_debiasing_t([x.size(0), ] + [1 for _ in range(x.ndim - 1)])
         t_.requires_grad = True
     else:
-        t_ = torch.rand([x.size(0), ] + [1 for _ in range(x.ndim - 1)], requires_grad=True).to(x) * model.T
-
+        #we cannot just uniformly sample when using the PINN-loss because the gradient explodes for t of order 1e-7
+        t_ = eps+torch.rand([x.size(0), ] + [1 for _ in range(x.ndim - 1)], requires_grad=True).to(x) * model.T
+        t_[torch.where(t_>model.T)] = model.T-eps
     return t_
 
 """

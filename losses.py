@@ -94,9 +94,9 @@ class ScoreFPELoss(nn.Module):
 
         s_t = torch.autograd.grad(s,t,grad_outputs=torch.ones_like(s), create_graph = True, retain_graph=True)[0]
         divx_s =divergence(s,x_t)
-        loss = torch.autograd.grad(divx_s.sum() + torch.sum(s ** 2), x_t, retain_graph=True)[0]
-        loss = torch.mean((s_t - .5 * beta * (s + loss)) ** 2, dim=1).view(batch_size, 1)
-        #loss = torch.mean(torch.abs(s_t - .5 * beta * (s + loss)), dim = 1).view(batch_size, 1)
+        loss = torch.autograd.grad(divx_s.sum() + torch.sum(s ** 2) + torch.sum(s[:,None,:]@x_t[:,:,None]), x_t, retain_graph=True)[0]
+        #loss = torch.mean((s_t - .5 * beta * loss) ** 2, dim=1).view(batch_size, 1)
+        loss = torch.mean(torch.abs(s_t - .5 * beta * loss), dim = 1).view(batch_size, 1)
         return loss
 
 class ErmonLoss(nn.Module):
