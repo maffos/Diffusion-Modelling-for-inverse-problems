@@ -99,6 +99,7 @@ class ScoreFPELoss(nn.Module):
         #loss = torch.mean(torch.abs(s_t - .5 * beta * loss), dim = 1).view(batch_size, 1)
         return loss
 
+#Loss as used by Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." 
 class ErmonLoss(nn.Module):
 
     def __init__(self, lam = 1.):
@@ -120,7 +121,7 @@ class ErmonLoss(nn.Module):
         loss = MSE_u+MSE_pde
         return loss.mean(), {'DSM-Loss': MSE_u.mean(), 'PDE-Loss': MSE_pde.mean()}
 
-#calculates PINN loss without x-collocations term, e.g. no dsm loss included
+
 class PINNLoss(nn.Module):
 
     def __init__(self, initial_condition, boundary_condition, lam = 1., lam2 = 1., lam3=1.):
@@ -158,8 +159,7 @@ class PINNLoss(nn.Module):
         
         return loss, {'PDE-Loss':MSE_pde.mean(), 'Initial Condition':initial_condition_loss.mean(), 'Boundary Condition':boundary_condition_loss.mean()}
     
-#the difference between this and ermon_loss is that ermon_loss does not include the initial and boundary condition.
-#doesn't work yet
+#PINNLoss+DSMLoss
 class PINNLoss2(PINNLoss):
 
     def __init__(self,initial_condition,boundary_condition, lam = 1., lam2 = 1., lam3 = 1.):

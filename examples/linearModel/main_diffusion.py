@@ -251,14 +251,14 @@ if __name__ == '__main__':
 
     #create data
     xs,ys = generate_dataset(n_samples=100000)
-
+    src_dir = 'examples/linearModel'
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
     model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
     loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition=lambda x: -x, lam = .1, lam2 = 1, lam3 = 1)
     #loss_fn = ErmonLoss(lam=10)
     optimizer = Adam(model.a.parameters(), lr = 1e-4)
 
-    train_dir = os.path.join(loss_fn.name,'lam=0.1_lam2=1')
+    train_dir = os.path.join(src_dir,loss_fn.name,'lam=0.1_lam2=1')
     out_dir = os.path.join(train_dir, 'results')
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)

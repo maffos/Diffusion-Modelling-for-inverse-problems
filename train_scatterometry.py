@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 from sbi.analysis import pairplot, conditional_pairplot
 
 from models.SNF import *
-from models.diffusion import *
 from losses import *
 from tqdm import tqdm
 import os
@@ -19,6 +18,46 @@ NOISE_STD_MCMC = 0.5
 METR_STEPS = 1000
 lambd_bd = 1000
 
+def create_diffusion_model2(xdim, ydim,hidden_layers):
+
+    net_params = {'input_dim': xdim + ydim+1,
+                  'output_dim': xdim,
+                  'hidden_layers': hidden_layers,
+                  'activation': nn.Tanh()}
+    forward_process = sdes.VariancePreservingSDE()
+    score_net = MLP(**net_params).to(device)
+    reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=False)
+    return reverse_process
+
+def get_grid(sde, cond1, xdim,ydim, num_samples = 2000, num_steps=200, transform=None,
+             mean=0, std=1):
+    cond = torch.zeros(num_samples, ydim).to(cond1.device)
+    cond += cond1
+    delta = sde.T / num_steps
+    y0 = torch.randn(num_samples, xdim).to(cond1.device)
+    y0 = y0 * std + mean
+    ts = torch.linspace(0, 1, num_steps + 1) * sde.T
+    ones = torch.ones(num_samples, 1)
+    with torch.no_grad():
+        for i in range(num_steps):
+            mu = sde.mu((ones * ts[i]).to(cond1.device), y0, cond)
+            sigma = sde.sigma((ones * ts[i]).to(cond1.device), y0)
+            y0 = y0 + delta * mu + delta ** 0.5 * sigma * torch.randn_like(y0).to(cond1.device)
+
+    y0 = y0.data.cpu().numpy()
+    return y0
+
+def sample_t(model,x, eps = 1e-4):
+
+    if model.debias:
+        t_ = model.base_sde.sample_debiasing_t([x.size(0), ] + [1 for _ in range(x.ndim - 1)])
+        t_.requires_grad = True
+    else:
+        #we cannot just uniformly sample when using the PINN-loss because the gradient explodes for t of order 1e-7
+        t_ = eps+torch.rand([x.size(0), ] + [1 for _ in range(x.ndim - 1)], requires_grad=True).to(x) * model.T
+        t_[torch.where(t_>model.T)] = model.T-eps
+    return t_
+    
 #is added to KL Divergence to improve numerical stability
 reg = 1e-10
 
@@ -63,11 +102,10 @@ def train(forward_model, num_epochs_SNF, num_epochs_diffusion, batch_size, lambd
     # define networks
     log_posterior=lambda samples, ys:get_log_posterior(samples,forward_model,a,b,ys,lambd_bd)
     snf = create_snf(4,64,log_posterior,metr_steps_per_block=10,dimension=3,dimension_condition=23,noise_std=0.4)
-    #diffusion_model = create_diffusion_model(xdim=3,ydim=23, embed_dim=2,hidden_layers=[512,512])
-    diffusion_model = create_diffusion_model2(xdim=3,ydim=23,hidden_layers=[1024,1024])
-    optimizer = Adam(snf.parameters(), lr = 1e-3)
+    diffusion_model = create_diffusion_model2(xdim=3,ydim=23,hidden_layers=[512,512])
+    optimizer = Adam(snf.parameters(), lr = 1e-4)
 
-    loss_fn = ErmonLoss(xdim)
+    loss_fn = PINNLoss(xdim)
     prog_bar = tqdm(total=num_epochs_SNF)
     for i in range(num_epochs_SNF):
         data_loader=get_epoch_data_loader(batch_size,forward_model,a,b,lambd_bd)
