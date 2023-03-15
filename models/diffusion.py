@@ -20,7 +20,8 @@ def create_diffusion_model2(xdim, ydim,hidden_layers):
 
     net_params = {'input_dim': xdim + ydim+1,
                   'output_dim': xdim,
-                  'hidden_layers': hidden_layers}
+                  'hidden_layers': hidden_layers,
+                  'activation': nn.Tanh()}
     forward_process = sdes.VariancePreservingSDE()
     score_net = MLP(**net_params).to(device)
     reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=False)

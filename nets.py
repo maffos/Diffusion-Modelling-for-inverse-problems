@@ -34,15 +34,17 @@ class INN(GraphINN):
     
 class MLP(nn.Sequential):
 
-    def __init__(self, input_dim, output_dim, hidden_layers):
+    def __init__(self, input_dim, output_dim, hidden_layers, activation):
 
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.hidden_layers = hidden_layers
-        super().__init__(nn.Linear(input_dim, hidden_layers[0]), nn.ReLU())
+
+        super().__init__(nn.Linear(input_dim, hidden_layers[0]), activation)
+        self.act = activation
         for i in range(len(hidden_layers)-1):
             self.append(nn.Linear(hidden_layers[i], hidden_layers[i+1]))
-            self.append(nn.ReLU())
+            self.append(self.act)
         self.append(nn.Linear(hidden_layers[-1], output_dim))
 
     def forward(self, x,t,y):

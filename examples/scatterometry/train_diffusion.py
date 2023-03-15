@@ -185,10 +185,10 @@ if __name__ == '__main__':
     hidden_layers = [512,512]
     model = create_diffusion_model2(xdim,ydim,hidden_layers)
     optimizer = Adam(model.a.parameters(), lr=1e-4)
-    #loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition = score_prior)
+    #loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition = score_prior, lam=.1)
     loss_fn = ErmonLoss(lam=.1)
 
-    train_dir = os.path.join(loss_fn.name, 'lam=.1')
+    train_dir = os.path.join(loss_fn.name, 'L1', 'lam=.1')
     log_dir = os.path.join(train_dir, 'logs')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)

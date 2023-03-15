@@ -47,6 +47,40 @@ def check_posterior(x,y,posterior, prior, likelihood, evidence):
     print(log_p2, log_p1)
     #assert torch.allclose(log_p1, log_p2, atol = 1e-5), "2 ways of calculating the posterior should be the same but are {} and {}".format(log_p1, log_p2)
 
+def check_diffusion(model, n_samples, num_plots):
+    for i in range(num_plots):
+        x = torch.randn(2)
+        y = f(x)
+        posterior = get_posterior(y)
+        x_0 = posterior.sample((n_samples,))
+        T = torch.ones((x_0.shape[0],1))
+        x_T, target_T, std_T, g_T = model.base_sde.sample(T, x_0, return_noise=True)
+        x_prior = torch.randn((n_samples,2))
+        kl_div = nn.functional.kl_div(x_T, x_prior)
+        fig, ax = pairplot([x_0], condition=y, limits=[[-3, 3], [-3, 3]])
+        fig.suptitle('Samples from the Posterior at y=(%.2f,%.2f)' % (y[0], y[1]))
+        fname = 'posterior-true%d.png' % i
+        plt.savefig(fname)
+        plt.show()
+        plt.close()
+        heatmap, xedges, yedges = np.histogram2d(x_T[:,0].data.numpy(), x_T[:,1].data.numpy(), bins=50)
+        extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+        plt.imshow(heatmap.T, extent=extent, origin='lower')
+        plt.title('Samples from the prior by running the SDE')
+        fname = 'prior-diffusion%d.png'%i
+        plt.savefig(fname)
+        plt.show()
+        plt.close()
+        heatmap, xedges, yedges = np.histogram2d(x_prior[:,0].data.numpy(), x_prior[:,1].data.numpy(), bins=50)
+        extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+        plt.imshow(heatmap.T, extent=extent, origin='lower')
+        plt.title('Samples from the true prior')
+        fname = 'prior-true%d.png'%i
+        plt.savefig(fname)
+        plt.show()
+        plt.close()
+        print('KL Divergence = %.4f'%kl_div)
+
 #affine function as forward problem
 def f(x):
     return (A@x.T).T+b
@@ -210,7 +244,7 @@ def evaluate(model, xs,ys, save_dir, n_samples = 2000, n_plots = 10):
 
         df = pd.DataFrame(
             {'KL': np.array([kl_div]), 'NLL_true': np.array([nll_true]), 'NLL_diffusion': np.array([nll_sample]), 'MSE': np.array([mse_score])})
-        df.to_csv(os.path.join(out_dir, 'results.csv'))
+        df.to_csv(os.path.join(save_dir, 'results.csv'))
         print('MSE: %.4f, NLL of samples: %.4f, NLL of true samples: %.4f, KL Div: %.4f'%(mse_score,nll_sample,nll_true, kl_div))
 
 if __name__ == '__main__':
@@ -220,11 +254,11 @@ if __name__ == '__main__':
 
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
     model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
-    loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition=lambda x: -x)
+    loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition=lambda x: -x, lam = .1, lam2 = 1, lam3 = 1)
     #loss_fn = ErmonLoss(lam=10)
     optimizer = Adam(model.a.parameters(), lr = 1e-4)
 
-    train_dir = os.path.join(loss_fn.name, 'L1','lam=10')
+    train_dir = os.path.join(loss_fn.name,'lam=0.1_lam2=1')
     out_dir = os.path.join(train_dir, 'results')
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -238,3 +272,6 @@ if __name__ == '__main__':
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
     evaluate(model, x_test[:100], y_test[:100], out_dir, n_samples = 10000, n_plots=10)
+
+    #model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
+    #check_diffusion(model, n_samples=20000,num_plots=3)
