@@ -24,7 +24,7 @@ def create_diffusion_model2(xdim, ydim,hidden_layers):
                   'activation': nn.Tanh()}
     forward_process = sdes.VariancePreservingSDE()
     score_net = MLP(**net_params).to(device)
-    reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=False)
+    reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=True)
     return reverse_process
 
 def get_grid(sde, cond1, xdim,ydim, num_samples = 2000, num_steps=200, transform=None,
@@ -48,7 +48,8 @@ def get_grid(sde, cond1, xdim,ydim, num_samples = 2000, num_steps=200, transform
 def sample_t(model,x, eps = 1e-4):
 
     if model.debias:
-        t_ = model.base_sde.sample_debiasing_t([x.size(0), ] + [1 for _ in range(x.ndim - 1)])
+        t_ = model.base_sde.sample_debiasing_t([x.size(0), ] + [1 for _ in range(x.ndim - 1)])+eps
+        t_[torch.where(t_>model.T)] -= eps
         t_.requires_grad = True
     else:
         #we cannot just uniformly sample when using the PINN-loss because the gradient explodes for t of order 1e-7

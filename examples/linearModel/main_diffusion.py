@@ -38,6 +38,33 @@ def generate_dataset(n_samples, random_state = 7):
     y = f(x)
     return x.to(device),y.to(device)
 
+def get_dataloader_dsm(scale,batch_size, nx,ny,nt):
+
+    eps = 1e-6
+    xs = []
+    ys = []
+    x_probe = torch.randn(ny,xdim)
+    y_probe = f(x_probe)
+    for y in y_probe:
+        posterior = get_posterior(y)
+        xs.append(posterior.sample((nx,)).repeat(nt,1))
+        ys.append(y.repeat(nx*nt,1))
+
+    xs = torch.cat(xs, dim=0)
+    ys = torch.cat(ys,dim=0)
+    ys += torch.randn_like(ys) * scale
+    ts = eps + torch.rand([nx*nt*ny,1])
+    ts[torch.where(ts > 1)] = model.T - eps
+
+    perm = torch.randperm(len(xs))
+    xs = xs[perm]
+    ys = ys[perm]
+    ts = ts[perm]
+    def epoch_data_loader():
+        for i in range(0, nx*ny*nt, batch_size):
+            yield xs[i:i+batch_size].to(device), ys[i:i+batch_size].to(device), ts[i:i+batch_size].to(device)
+
+    return epoch_data_loader
 def check_posterior(x,y,posterior, prior, likelihood, evidence):
 
 
@@ -138,12 +165,14 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
     for i in range(num_epochs):
 
         train_loader = utils.get_dataloader_noise(xs, ys,scale,batch_size)
+        #train_loader = get_dataloader_dsm(scale,batch_size,200,100,5)
         mean_loss = 0
         logger_info = {}
 
         for x,y in train_loader():
 
-            x = torch.ones_like(x, requires_grad=True)*x
+            x = torch.ones_like(x, requires_grad=True).to(x)*x
+            #t = torch.ones_like(t,requires_grad=True).to(t)*t
             t = sample_t(model,x)
             if debug:
                 ts+=t.flatten().tolist()
@@ -152,28 +181,34 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
                     min_epoch = i
             loss,loss_info = loss_fn(model,x,t,y)
             mean_loss += loss.data.item()
+
             for key,value in loss_info.items():
                 try:
                     logger_info[key] +=value.item()
                 except:
                     logger_info[key] = value.item()
+        
             if debug:
                 if torch.isnan(loss):
                     for key,value in loss_info.items():
                         print(key + ':' + str(value))
                     raise ValueError('Loss is nan, min sampled t was {}. Minimal t during training was {} in epoch {}. Current Epoch: {}'.format(torch.min(t),t_min, min_epoch, i))
+
             optim.zero_grad()
             loss.backward()
             optim.step()
 
+
         mean_loss /= (xs.shape[0]//batch_size)
+
         for key in logger_info.keys():
             logger_info[key] /= (xs.shape[0]//batch_size)
 
         logger.add_scalar('Train/Loss', mean_loss, i)
         for key, value in logger_info.items():
             logger.add_scalar('Train/' + key, value, i)
-        prog_bar.set_description('loss: {:.4f}'.format(loss))
+
+        prog_bar.set_description('loss: {:.4f}'.format(mean_loss))
         prog_bar.update()
     prog_bar.close()
 
@@ -251,14 +286,16 @@ if __name__ == '__main__':
 
     #create data
     xs,ys = generate_dataset(n_samples=100000)
-    src_dir = 'examples/linearModel'
+    src_dir = 'examples/linearModel/test'
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
     model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
-    loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition=lambda x: -x, lam = .1, lam2 = 1, lam3 = 1)
-    #loss_fn = ErmonLoss(lam=10)
+    loss_fn = PINNLoss2(initial_condition=score_posterior,boundary_condition= lambda x: -x, lam=.1, pde_loss = 'FPE')
+    #loss_fn = ScoreFlowMatchingLoss(lam=.1)
+    #loss_fn = PINNLoss3(initial_condition = score_posterior, lam = .1, lam2 = 1)
+    #loss_fn = ErmonLoss(lam=.1, pde_loss = 'FPELoss')
     optimizer = Adam(model.a.parameters(), lr = 1e-4)
 
-    train_dir = os.path.join(src_dir,loss_fn.name,'lam=0.1_lam2=1')
+    train_dir = os.path.join(src_dir,loss_fn.name, 'test', 'lam=.1')
     out_dir = os.path.join(train_dir, 'results')
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -268,10 +305,10 @@ if __name__ == '__main__':
     os.makedirs(log_dir)
 
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=1000)
+    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=500)
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
-    evaluate(model, x_test[:100], y_test[:100], out_dir, n_samples = 10000, n_plots=10)
+    evaluate(model, x_test[:20], y_test[:20], out_dir, n_samples = 10000, n_plots=10)
 
     #model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
     #check_diffusion(model, n_samples=20000,num_plots=3)

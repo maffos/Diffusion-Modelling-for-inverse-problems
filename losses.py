@@ -70,7 +70,32 @@ class MultipleLoss(nn.Module):
         loss = (1-lmbd)*self.loss1_fn(y_true,y_predict) + lmbd * self.loss2_fn(y_true, y_predict, **params)
         return loss
 
+class DFMLoss(nn.Module):
 
+    def __init__(self):
+        super(DFMLoss, self).__init__()
+        self.name = 'DFMLoss'
+
+    def forward(self, model,sde,x,t,y):
+
+        x_t, target, std, g = sde.sample(1-t, x, return_noise=True)
+        v = model(x_t,t,y)
+        alpha = sde.mean_weight(1-t)
+        beta = g**2
+        #u=-.5*beta*alpha*(alpha*x_t-x)/(2*std**2) #with x_t
+        u = -.5*beta*alpha*(alpha*target-std*x)/std
+
+        loss = torch.sum((u-v)**2, dim=1)
+
+        if torch.any(torch.isnan(loss)):
+            print('Std:',std)
+            print('beta:',beta)
+            print('alpha:',alpha)
+            print('u:',u)
+            print('v:',v)
+            raise ValueError('loss is nan')
+        return loss
+       
 class DSMLoss(nn.Module):
     
     def __init__(self):
@@ -83,31 +108,116 @@ class DSMLoss(nn.Module):
         batch_size = s.shape[0]
         return ((s * std + target) ** 2).view(batch_size, -1).sum(1, keepdim=False) / 2
 
+class CFMLoss(nn.Module):
+
+    def __init__(self):
+        super(CFMLoss, self).__init__()
+        self.name = 'CFMLoss'
+
+    def forward(self, model,s,t,beta,target,std):
+        v = torch.autograd.grad(s, t, grad_outputs=torch.ones_like(s), create_graph=True, retain_graph=True)[0]
+        # u=.5*beta*mu*(target*std/(1-mu**2)-1) #erste version
+        # u= .5*target*beta*model.base_sde.mean_weight(t)**2 #sigma^5
+        u = .5 * target * beta * model.base_sde.mean_weight(t) ** 2
+        loss = torch.sum((u - std ** 4 * v) ** 2, dim=1)
+
+        return loss
+class ScoreFlowMatchingLoss(nn.Module):
+
+    def __init__(self, lam = 1.):
+
+        super(ScoreFlowMatchingLoss, self).__init__()
+        self.name = 'ScoreFlowMatching'
+        self.dsm_loss = DSMLoss()
+        self.lam = lam
+
+    def forward(self,model,x,t,y):
+
+        x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
+        t0 = torch.zeros_like(t)
+        T = torch.ones_like(t)
+        g_0 = model.base_sde.g(t0, x_t)
+        x_T, target_T, std_T, g_T = model.base_sde.sample(T, x, return_noise=True)
+        beta = model.base_sde.beta(t)
+
+        s = model.a(x_t, t, y) / g
+        v = torch.autograd.grad(s, t, grad_outputs=torch.ones_like(s), create_graph=True, retain_graph=True)[0]
+        #mu = model.base_sde.mean_weight(t)*x
+        #u=.5*beta*mu*(target*std/(1-mu**2)-1) #erste version
+        #u= .5*target*beta*model.base_sde.mean_weight(t)**2 #sigma^5
+        u = .5*target*beta*model.base_sde.mean_weight(t)**2/std
+        dsm_loss = self.dsm_loss(s,std,target)
+        cfm_loss = self.lam*torch.sum((u-std**3*v)**2,dim=1)
+        loss = dsm_loss+cfm_loss
+        return loss.mean(), {'DSM-Loss':dsm_loss.mean(),'CFM-loss':cfm_loss.mean()}
 class ScoreFPELoss(nn.Module):
 
     def __init__(self):
 
         super(ScoreFPELoss,self).__init__()
+        self.name = 'FPELoss'
 
-    def forward(self, s, x_t, t, beta):
+    def forward(self, s, x_t, t, beta, metric = 'L1'):
+        batch_size = x_t.shape[0]
+
+        s_t = torch.autograd.grad(s,t,grad_outputs=torch.ones_like(s), create_graph = True, retain_graph=True)[0]
+        #logger.add_scalar('Train/ddt_s', s_t.mean(), i)
+        divx_s = divergence(s,x_t)
+        #logger.add_scalar('Train/Divergence-Term', divx_s.mean(), i)
+        #sq_norm = s ** 2
+        #logger.add_scalar('Train/square_norm', sq_norm.mean(),i)
+        #scalar_product = (s[:,None,:]@x_t[:,:,None]).view(-1,1)
+        #logger.add_scalar('Train/scalar_product', scalar_product.mean(),i)
+        loss = torch.autograd.grad(divx_s.sum() + torch.sum(s ** 2, dim=1).sum() + (s[:, None, :] @ x_t[:, :, None]).sum(),
+                                   x_t, retain_graph=True)[0]
+        #loss = torch.autograd.grad(divx_s + s ** 2 + (s[:, None, :] @ x_t[:, :, None]).view(-1,1),
+        #                           x_t, grad_outputs=torch.ones_like(s), retain_graph=True)[0]
+        #logger.add_scalar('Train/Autodiff', loss.mean(), i)
+        if metric == 'L1':
+            loss = torch.mean(torch.abs(s_t - .5 * beta * loss), dim=1).view(batch_size, 1)
+        elif metric == 'L2':
+            loss = torch.sqrt(torch.sum((s_t-0.5*beta*loss)**2, dim = 1)).view(batch_size,1)
+        else:
+            loss = torch.mean((s_t - .5 * beta * loss) ** 2, dim=1).view(batch_size, 1)
+        return loss
+
+#Loss resulting from the HJB PDE. Only difference to the Score FPE is the minus sign of divergence term
+class ScoreHJBLoss(nn.Module):
+
+    def __init__(self):
+
+        super(ScoreHJBLoss,self).__init__()
+        self.name = 'HJBLoss'
+
+    def forward(self, s, x_t, t, beta, metric = 'L1'):
         batch_size = x_t.shape[0]
 
         s_t = torch.autograd.grad(s,t,grad_outputs=torch.ones_like(s), create_graph = True, retain_graph=True)[0]
         divx_s = divergence(s,x_t)
-        loss = torch.autograd.grad(divx_s.sum() + torch.sum(s ** 2) + torch.sum(s[:,None,:]@x_t[:,:,None]), x_t, retain_graph=True)[0]
-        loss = torch.mean((s_t - .5 * beta * loss) ** 2, dim=1).view(batch_size, 1)
-        #loss = torch.mean(torch.abs(s_t - .5 * beta * loss), dim = 1).view(batch_size, 1)
+        loss = torch.autograd.grad(-divx_s + s ** 2 + (s[:,None,:]@x_t[:,:,None]).view(-1,1),
+                                   x_t,grad_outputs=torch.ones_like(s),retain_graph=True)[0]
+        if metric == 'L1':
+            loss = torch.mean(torch.abs(s_t - .5 * beta * loss), dim=1).view(batch_size, 1)
+        elif metric == 'L2':
+            loss = torch.sqrt(torch.sum((s_t-0.5*beta*loss)**2, dim = 1)).view(batch_size,1)
+        else:
+            loss = torch.mean((s_t - .5 * beta * loss) ** 2, dim=1).view(batch_size, 1)
         return loss
 
 #Loss as used by Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." 
 class ErmonLoss(nn.Module):
 
-    def __init__(self, lam = 1.):
+    def __init__(self, lam=1., pde_loss='HJB'):
 
         super(ErmonLoss,self).__init__()
         self.lam = lam
         self.dsm_loss = DSMLoss()
-        self.pde_loss = ScoreFPELoss()
+        if pde_loss == 'HJB':
+            self.pde_loss = ScoreHJBLoss()
+        elif pde_loss == 'FPE':
+            self.pde_loss = ScoreFPELoss()
+        else:
+            self.pde_loss = CFMLoss()
         self.name = 'ErmonLoss'
 
     def forward(self,model,x,t,y):
@@ -117,14 +227,17 @@ class ErmonLoss(nn.Module):
         beta = model.base_sde.beta(t)
 
         MSE_u = self.dsm_loss(s,std,target)
-        MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
+        if self.pde_loss.name == 'CFMLoss':
+            MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
+        else:
+            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
         loss = MSE_u+MSE_pde
         return loss.mean(), {'DSM-Loss': MSE_u.mean(), 'PDE-Loss': MSE_pde.mean()}
 
 
 class PINNLoss(nn.Module):
 
-    def __init__(self, initial_condition, boundary_condition, lam = 1., lam2 = 1., lam3=1.):
+    def __init__(self, initial_condition, boundary_condition, lam = 1., lam2 = 1., lam3=1., pde_loss = 'HJB'):
 
         super(PINNLoss,self).__init__()
         self.lam = lam
@@ -132,7 +245,12 @@ class PINNLoss(nn.Module):
         self.lam3 = lam3
         self.initial_condition = initial_condition
         self.boundary_condition = boundary_condition
-        self.pde_loss = ScoreFPELoss()
+        if pde_loss == 'HJB':
+            self.pde_loss = ScoreHJBLoss()
+        elif pde_loss == 'FPE':
+            self.pde_loss = ScoreFPELoss()
+        else:
+            self.pde_loss = CFMLoss()
         self.name = 'PinnLoss'
 
     def forward(self, model,x,t,y):
@@ -154,7 +272,10 @@ class PINNLoss(nn.Module):
         initial_condition_loss = self.lam2*torch.mean((s_0-self.initial_condition(x,y))**2, dim=1).view(batch_size,1)
         boundary_condition_loss = self.lam3*torch.mean((s_T-self.boundary_condition(x_T))**2, dim=1).view(batch_size,1)
         MSE_u = initial_condition_loss+boundary_condition_loss
-        MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
+        if self.pde_loss.name == 'CFMLoss':
+            MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
+        else:
+            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
         loss = torch.mean(MSE_u + MSE_pde)
         
         return loss, {'PDE-Loss':MSE_pde.mean(), 'Initial Condition':initial_condition_loss.mean(), 'Boundary Condition':boundary_condition_loss.mean()}
@@ -162,11 +283,16 @@ class PINNLoss(nn.Module):
 #PINNLoss+DSMLoss
 class PINNLoss2(PINNLoss):
 
-    def __init__(self,initial_condition,boundary_condition, lam = 1., lam2 = 1., lam3 = 1.):
+    def __init__(self,initial_condition,boundary_condition, lam = 1., lam2 = 1., lam3 = 1., pde_loss = 'HJB'):
 
         super(PINNLoss2, self).__init__(initial_condition,boundary_condition, lam, lam2, lam3)
         self.dsm_loss = DSMLoss()
-        self.pde_loss = ScoreFPELoss()
+        if pde_loss == 'HJB':
+            self.pde_loss = ScoreHJBLoss()
+        elif pde_loss == 'FPE':
+            self.pde_loss = ScoreFPELoss()
+        else:
+            self.pde_loss = CFMLoss()
         self.name = 'PINNLoss2'
 
     def forward(self, model,x,t,y):
@@ -189,7 +315,10 @@ class PINNLoss2(PINNLoss):
             batch_size, 1)
         dsm_loss = self.dsm_loss(s, std, target)
         MSE_u = initial_condition_loss + boundary_condition_loss+dsm_loss
-        MSE_pde = self.lam * self.pde_loss(s, x_t, t, beta)
+        if self.pde_loss.name == 'CFMLoss':
+            MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
+        else:
+            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
         loss = torch.mean(MSE_u + MSE_pde)
 
         return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(),
@@ -197,13 +326,20 @@ class PINNLoss2(PINNLoss):
 
 
 #calculates PINN loss without boundary condition term
-class PINNLoss3(ErmonLoss):
+class PINNLoss3(nn.Module):
 
-    def __init__(self,initial_condition, lam = 1., lam2 = 1.):
+    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'HJB'):
 
-        super(PINNLoss3, self).__init__(lam)
+        super(PINNLoss3, self).__init__()
+        self.lam = lam
         self.lam2 = lam2
         self.initial_condition = initial_condition
+        if pde_loss == 'HJB':
+            self.pde_loss = ScoreHJBLoss()
+        elif pde_loss == 'FPE':
+            self.pde_loss = ScoreFPELoss()
+        else:
+            self.pde_loss = CFMLoss()
         self.name = 'PINNLoss3'
 
     def forward(self,model,x,t,y):
@@ -219,9 +355,11 @@ class PINNLoss3(ErmonLoss):
 
         initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
             batch_size, 1)
-        dsm_loss = self.dsm_loss(s, std, target)
-        MSE_u = initial_condition_loss + dsm_loss
-        MSE_pde = self.lam * self.pde_loss(s, x_t, t, beta)
-        loss = torch.mean(MSE_u + MSE_pde)
+        #dsm_loss = self.dsm_loss(s, std, target)
+        if self.pde_loss.name == 'CFMLoss':
+            MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
+        else:
+            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
+        loss = torch.mean(initial_condition_loss + MSE_pde)
 
-        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM-Loss': dsm_loss.mean()}
+        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean()}
