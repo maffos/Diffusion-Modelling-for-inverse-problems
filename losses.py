@@ -83,16 +83,18 @@ class DFMLoss(nn.Module):
         alpha = sde.mean_weight(1-t)
         beta = g**2
         #u=-.5*beta*alpha*(alpha*x_t-x)/(2*std**2) #with x_t
-        u = -.5*beta*alpha*(alpha*target-std*x)/std
+        u = -.5*beta*alpha*(alpha*target-std*x)
 
-        loss = torch.sum((u-v)**2, dim=1)
+        loss = torch.sum((std*v-u)**2, dim=1)
 
         if torch.any(torch.isnan(loss)):
-            print('Std:',std)
-            print('beta:',beta)
-            print('alpha:',alpha)
-            print('u:',u)
-            print('v:',v)
+            print('x:',x[torch.where(torch.isnan(std))])
+            print('Std:',torch.where(torch.isnan(std)))
+            print('beta:',torch.any(torch.isnan(beta)))
+            print('alpha:',torch.any(torch.isnan(alpha)))
+            print('u:',torch.any(torch.isnan(u)))
+            print('v:',torch.any(torch.isnan(v)))
+            print('t:', t[torch.where(torch.isnan(std))])
             raise ValueError('loss is nan')
         return loss
        
@@ -119,7 +121,7 @@ class CFMLoss(nn.Module):
         # u=.5*beta*mu*(target*std/(1-mu**2)-1) #erste version
         # u= .5*target*beta*model.base_sde.mean_weight(t)**2 #sigma^5
         u = .5 * target * beta * model.base_sde.mean_weight(t) ** 2
-        loss = torch.sum((u - std ** 4 * v) ** 2, dim=1)
+        loss = torch.sum((std ** 4 * v-u) ** 2, dim=1)
 
         return loss
 class ScoreFlowMatchingLoss(nn.Module):

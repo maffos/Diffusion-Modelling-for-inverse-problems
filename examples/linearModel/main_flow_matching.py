@@ -67,6 +67,27 @@ def score_posterior(x,y):
     score_likelihood = y_res@Sigma_inv@A.T
     return score_prior+score_likelihood
 
+class CNF(nn.Module):
+
+    def __init__(self, net,xdim=2,ydim=2):
+        super(CNF, self).__init__()
+        self.net = net
+        self.xdim=xdim
+        self.ydim=ydim
+
+    def forward(self, t, x):
+        y = x[-1,:self.ydim]
+        x = x[:-1,:self.xdim]
+        y_batched = y.repeat(len(x),1)
+        t_batched = t.repeat(len(x),1)
+        x_new = self.net(x,t_batched,y_batched)
+        pad_x = torch.zeros(len(x),np.abs(self.ydim-self.xdim))
+        x_new = torch.cat([x_new,pad_x],dim=1)
+        pad_y = torch.zeros(np.abs(self.ydim-self.xdim))
+        y = torch.cat([y,pad_y])
+        x_new = torch.cat([x_new,y.view(1,-1)],dim=0)
+
+        return x_new
 def train(model, forward_sde, xs,ys, optim,loss_fn,out_dir,log_dir,batch_size = 1000,num_epochs=1000):
     model.train()
     logger = SummaryWriter(log_dir)
@@ -79,7 +100,9 @@ def train(model, forward_sde, xs,ys, optim,loss_fn,out_dir,log_dir,batch_size = 
 
         for x, y in train_loader():
 
-            t = torch.rand([batch_size,1]).to(x)+1e-5
+            #the std of p(x_t|x_0) where t=0 becomes nan. Therefore we subtract by 1e-5 to avoid t=1, since we sample at 1-t
+            t = torch.rand([batch_size,1]).to(x)-1e-5
+            t[torch.where(t<0)]+=1e-5
             loss = loss_fn(model, forward_sde, x, t, y).mean()
             mean_loss += loss.data.item()
 
@@ -102,16 +125,18 @@ def train(model, forward_sde, xs,ys, optim,loss_fn,out_dir,log_dir,batch_size = 
     torch.save(model.state_dict(), current_model_path)
     return model
 
-def sample(model,num_samples,dt=.01):
+def sample(model,y,num_samples,dt=.01):
     x0 = torch.randn(num_samples,xdim).to(device)
-    t_ = torch.linspace(0,1,1/dt)
-    x_t = odeint(model,x0,t_)
+    t_ = torch.linspace(0,1,int(1/dt))
+    x = torch.cat([x0,y.view(1,-1)],dim=0)
+    x_t = odeint(model,x,t_)
 
     return x_t
 
 def evaluate(model,xs,ys, save_dir, n_samples = 2000, n_plots = 10):
 
     model.eval()
+    ode_net = CNF(model)
     with torch.no_grad():
 
         nll_sample = 0
@@ -122,8 +147,8 @@ def evaluate(model,xs,ys, save_dir, n_samples = 2000, n_plots = 10):
         prog_bar = tqdm(total=len(xs))
         for i, y in enumerate(ys):
             posterior = get_posterior(y)
-            trajectory = sample(model.to(device),num_samples=n_samples)
-            x_pred = trajectory[-1]
+            trajectory = sample(ode_net.to(device),y,num_samples=n_samples)
+            x_pred = trajectory[-1,:n_samples,:xdim]
 
             if i in plot_ys:
                 fig, ax = conditional_pairplot(posterior, condition=y, limits=[[-3, 3], [-3, 3]])
@@ -138,10 +163,10 @@ def evaluate(model,xs,ys, save_dir, n_samples = 2000, n_plots = 10):
                 plt.close()
 
             x_true = posterior.sample((n_samples,))
-            nll_sample += -torch.mean(posterior.log_prob(torch.from_numpy(x_pred)))
+            nll_sample += -torch.mean(posterior.log_prob(x_pred))
             # calculate nll of true samples from posterior for reference
             nll_true += -torch.mean(posterior.log_prob(x_true))
-            kl_div += nn.functional.kl_div(torch.from_numpy(x_pred), x_true).mean()
+            kl_div += nn.functional.kl_div(x_pred, x_true).mean()
             prog_bar.set_description('NLL samples: %.4f NLL true %.4f' % (nll_sample, nll_true))
             prog_bar.update()
 
@@ -178,4 +203,4 @@ if __name__ == '__main__':
 
 
     model = train(model,forward_process,x_train,y_train, optimizer,loss_fn, train_dir, log_dir, num_epochs=500)
-    evaluate(model, x_test[:20], y_test[:20], out_dir, n_samples = 10000, n_plots=10)
+    evaluate(model, x_test[:100], y_test[:100], out_dir, n_samples = 10000, n_plots=10)
