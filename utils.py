@@ -140,6 +140,43 @@ def product_dict(**kwargs):
     for instance in itertools.product(*vals):
         yield dict(zip(keys, instance))
 
+def rademacher_like(s):
+
+    v = torch.distributions.bernoulli.Bernoulli(torch.ones_like(s)*.5).sample()
+    v[torch.where(v==0)]=-1
+    return v
+
+#function copied from https://discuss.pytorch.org/t/how-to-compute-jacobian-matrix-in-pytorch/14968/14
+def divergence(y, x):
+    div = 0.
+    for i in range(y.shape[-1]):
+        div += torch.autograd.grad(y[..., i], x, torch.ones_like(y[..., i]), create_graph=True, retain_graph=True)[0][..., i:i+1]
+    return div
+
+import torch
+
+def batch_gradient(y,x):
+    grad = torch.zeros_like(y)
+    for i in range(y.shape[1]):
+        dy_dx = torch.autograd.grad(y[:,i].sum(),x, retain_graph=True, create_graph=True)[0]
+        dy_dx = dy_dx.view(-1)
+        grad[:,i] += dy_dx
+    return grad
+
+def div_estimator(s,x,num_samples=1, rademacher = True):
+
+    div = torch.zeros(s.shape[0],1)
+    for _ in range(num_samples):
+        if rademacher:
+            v = rademacher_like(s)
+        else:
+            v = torch.randn_like(s)
+        vjp = torch.autograd.grad(s,x,grad_outputs = v, create_graph=True, retain_graph=True)[0]
+        div += (vjp[:,None,:]@v[:,:,None]).view(-1,1)
+
+    div /= num_samples
+    return div
+
 def make_image(pred_samples,x_true, num_epochs, output_dir = None, inds=None, show_plot = False, savefig = True):
 
     cmap = plt.cm.tab20

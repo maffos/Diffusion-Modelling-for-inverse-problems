@@ -286,16 +286,16 @@ if __name__ == '__main__':
 
     #create data
     xs,ys = generate_dataset(n_samples=100000)
-    src_dir = 'examples/linearModel/test'
+    src_dir = 'ScoreFPE'
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
     model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
-    loss_fn = PINNLoss2(initial_condition=score_posterior,boundary_condition= lambda x: -x, lam=.1, pde_loss = 'FPE')
+    loss_fn = PINNLoss4(initial_condition=score_posterior, lam=.1, pde_loss = 'FPE')
     #loss_fn = ScoreFlowMatchingLoss(lam=.1)
     #loss_fn = PINNLoss3(initial_condition = score_posterior, lam = .1, lam2 = 1)
-    #loss_fn = ErmonLoss(lam=.1, pde_loss = 'FPELoss')
+    #loss_fn = ErmonLoss(lam=0., pde_loss = 'FPELoss')
     optimizer = Adam(model.a.parameters(), lr = 1e-4)
 
-    train_dir = os.path.join(src_dir,loss_fn.name, 'test', 'lam=.1')
+    train_dir = os.path.join(src_dir,loss_fn.name, 'lam=0.1')
     out_dir = os.path.join(train_dir, 'results')
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -305,7 +305,7 @@ if __name__ == '__main__':
     os.makedirs(log_dir)
 
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=500)
+    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=5000)
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
     evaluate(model, x_test[:20], y_test[:20], out_dir, n_samples = 10000, n_plots=10)
