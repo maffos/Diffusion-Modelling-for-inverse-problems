@@ -111,41 +111,12 @@ class CFMLoss(nn.Module):
         self.name = 'CFMLoss'
 
     def forward(self, model,s,t,beta,target,std):
-        v = torch.autograd.grad(s, t, grad_outputs=torch.ones_like(s), create_graph=True, retain_graph=True)[0]
+        v = batch_gradient(s,t)
         # u=.5*beta*mu*(target*std/(1-mu**2)-1) #erste version
-        # u= .5*target*beta*model.base_sde.mean_weight(t)**2 #sigma^5
         u = .5 * target * beta * model.base_sde.mean_weight(t) ** 2
-        loss = torch.sum((std ** 4 * v-u) ** 2, dim=1)
+        loss = torch.sum((std ** 5 * v-u) ** 2, dim=1)
 
         return loss
-class ScoreFlowMatchingLoss(nn.Module):
-
-    def __init__(self, lam = 1.):
-
-        super(ScoreFlowMatchingLoss, self).__init__()
-        self.name = 'ScoreFlowMatching'
-        self.dsm_loss = DSMLoss()
-        self.lam = lam
-
-    def forward(self,model,x,t,y):
-
-        x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
-        t0 = torch.zeros_like(t)
-        T = torch.ones_like(t)
-        g_0 = model.base_sde.g(t0, x_t)
-        x_T, target_T, std_T, g_T = model.base_sde.sample(T, x, return_noise=True)
-        beta = model.base_sde.beta(t)
-
-        s = model.a(x_t, t, y) / g
-        v = torch.autograd.grad(s, t, grad_outputs=torch.ones_like(s), create_graph=True, retain_graph=True)[0]
-        #mu = model.base_sde.mean_weight(t)*x
-        #u=.5*beta*mu*(target*std/(1-mu**2)-1) #erste version
-        #u= .5*target*beta*model.base_sde.mean_weight(t)**2 #sigma^5
-        u = .5*target*beta*model.base_sde.mean_weight(t)**2/std
-        dsm_loss = self.dsm_loss(s,std,target)
-        cfm_loss = self.lam*torch.sum((u-std**3*v)**2,dim=1)
-        loss = dsm_loss+cfm_loss
-        return loss.mean(), {'DSM-Loss':dsm_loss.mean(),'CFM-loss':cfm_loss.mean()}
         
 class ScoreFPELoss(nn.Module):
 
@@ -157,26 +128,23 @@ class ScoreFPELoss(nn.Module):
     def forward(self, s, x_t, t, beta, metric = 'L1', divergence_method = 'exact'):
         batch_size = x_t.shape[0]
 
-        ds_dt = batch_gradient(s,t)
         if divergence_method == 'exact':
             divx_s = divergence(s,x_t)
         elif divergence_method in ['hutchinson', 'approx', 'approximate']:
             divx_s = div_estimator(s,x_t)
         else:
             raise ValueError('No valid value for divergence method specified')
-        #loss = torch.autograd.grad(divx_s.sum() + torch.sum(s ** 2, dim=1).sum() + (s[:, None, :] @ x_t[:, :, None]).sum(),
-        #                           x_t, retain_graph=True)[0]
-        grad = torch.autograd.grad(divx_s + torch.sum(s ** 2,dim=1).view(-1,1) + (x_t[:, None, :] @ s[:, :, None]).view(-1,1),
+
+        ds_dt = batch_gradient(s,t)
+        grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2,dim=1).view(-1,1) + (x_t[:, None, :] @ s[:, :, None]).view(-1,1),
         x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
-        #third_order_term = torch.autograd.grad(divx_s,x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
-        #second_order_term = torch.autograd.grad(s,x_t, grad_outputs=2*s+x_t, retain_graph=True)[0]
-        #loss = third_order_term+second_order_term+s
+
         if metric == 'L1':
-            loss = torch.mean(torch.abs(ds_dt - .5 * beta * grad), dim=1).view(batch_size, 1)
+            loss = torch.mean(torch.abs(ds_dt - .5 * beta * grad_x), dim=1).view(batch_size, 1)
         elif metric == 'L2':
-            loss = torch.sqrt(torch.sum((ds_dt-0.5*beta*grad)**2, dim = 1)).view(batch_size,1)
+            loss = torch.sum((ds_dt-0.5*beta*grad_x)**2, dim = 1).view(batch_size,1)
         else:
-            loss = torch.mean((ds_dt - .5 * beta * grad) ** 2, dim=1).view(batch_size, 1)
+            loss = torch.mean((ds_dt - .5 * beta * grad_x) ** 2, dim=1).view(batch_size, 1)
         return loss
 
 #Loss resulting from the HJB PDE. Only difference to the Score FPE is the minus sign of divergence term
@@ -190,16 +158,16 @@ class ScoreHJBLoss(nn.Module):
     def forward(self, s, x_t, t, beta, metric = 'L1'):
         batch_size = x_t.shape[0]
 
-        s_t = torch.autograd.grad(s,t,grad_outputs=torch.ones_like(s), create_graph = True, retain_graph=True)[0]
+        ds_dt = batch_gradient(s,t)
         divx_s = divergence(s,x_t)
-        loss = torch.autograd.grad(-divx_s + s ** 2 + (s[:,None,:]@x_t[:,:,None]).view(-1,1),
+        grad_x = torch.autograd.grad(-divx_s + s ** 2 + (s[:,None,:]@x_t[:,:,None]).view(-1,1),
                                    x_t,grad_outputs=torch.ones_like(s),retain_graph=True)[0]
         if metric == 'L1':
-            loss = torch.mean(torch.abs(s_t - .5 * beta * loss), dim=1).view(batch_size, 1)
+            loss = torch.mean(torch.abs(ds_dt - .5 * beta * grad_x), dim=1).view(batch_size, 1)
         elif metric == 'L2':
-            loss = torch.sqrt(torch.sum((s_t-0.5*beta*loss)**2, dim = 1)).view(batch_size,1)
+            loss = torch.sqrt(torch.sum((ds_dt-0.5*beta*grad_x)**2, dim = 1)).view(batch_size,1)
         else:
-            loss = torch.mean((s_t - .5 * beta * loss) ** 2, dim=1).view(batch_size, 1)
+            loss = torch.mean((ds_dt - .5 * beta * grad_x) ** 2, dim=1).view(batch_size, 1)
         return loss
 
 #Loss as used by Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." 

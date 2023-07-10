@@ -152,7 +152,7 @@ def log_plot(dist):
     plt.title('Prior Distribution')
     plt.show()
 
-def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size=1000, debug = False):
+def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size=1000, debug = False, resume_training = False):
 
     model.train()
     logger = SummaryWriter(log_dir)
@@ -204,9 +204,15 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
         for key in logger_info.keys():
             logger_info[key] /= (xs.shape[0]//batch_size)
 
-        logger.add_scalar('Train/Loss', mean_loss, i)
-        for key, value in logger_info.items():
-            logger.add_scalar('Train/' + key, value, i)
+        if resume_training:
+            logger.add_scalar('Train/Loss', mean_loss, i+5000)
+            for key, value in logger_info.items():
+                logger.add_scalar('Train/' + key, value, i+5000)
+
+        else:
+            logger.add_scalar('Train/Loss', mean_loss, i)
+            for key, value in logger_info.items():
+                logger.add_scalar('Train/' + key, value, i)
 
         prog_bar.set_description('loss: {:.4f}'.format(mean_loss))
         prog_bar.update()
@@ -286,29 +292,50 @@ if __name__ == '__main__':
 
     #create data
     xs,ys = generate_dataset(n_samples=100000)
-    src_dir = 'ScoreFPE'
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
-    model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
-    loss_fn = PINNLoss4(initial_condition=score_posterior, lam=.1, pde_loss = 'FPE')
+
+    #define parameters
+    src_dir = 'ScoreFlowMatching/3layers'
+    hidden_layers = [512,512,512]
+    resume_training = False
+    pde_loss = 'CFM'
+    lam = .1
+    lr = 1e-4
+
+    #define models
+    model = create_diffusion_model2(xdim,ydim, hidden_layers=hidden_layers)
+    #loss_fn =PINNLoss2(initial_condition=score_posterior, boundary_condition=lambda x: -x, pde_loss=pde_loss, lam=lam)
+    loss_fn = PINNLoss4(initial_condition=score_posterior, lam=.1,lam2=1., pde_loss = pde_loss)
     #loss_fn = ScoreFlowMatchingLoss(lam=.1)
     #loss_fn = PINNLoss3(initial_condition = score_posterior, lam = .1, lam2 = 1)
-    #loss_fn = ErmonLoss(lam=0., pde_loss = 'FPELoss')
+    #loss_fn = ErmonLoss(lam=0.1, pde_loss = 'FPE')
     optimizer = Adam(model.a.parameters(), lr = 1e-4)
 
     train_dir = os.path.join(src_dir,loss_fn.name, 'lam=0.1')
-    out_dir = os.path.join(train_dir, 'results')
+    if resume_training:
+        model.a.load_state_dict(torch.load(os.path.join(train_dir,'current_model.pt'),map_location=torch.device(device)))
+        out_dir = os.path.join(train_dir, 'results_resume')
+    else:
+        out_dir = os.path.join(train_dir, 'results')
+
+    if os.path.exists(out_dir) and not resume_training:
+        shutil.rmtree(out_dir)
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
+
     log_dir = os.path.join(train_dir, 'logs')
-    if os.path.exists(log_dir):
+
+    if os.path.exists(log_dir) and not resume_training:
         shutil.rmtree(log_dir)
-    os.makedirs(log_dir)
+
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
 
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=5000)
+    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=5000, resume_training = resume_training)
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
-    evaluate(model, x_test[:20], y_test[:20], out_dir, n_samples = 10000, n_plots=10)
+    evaluate(model, x_test[:100], y_test[:100], out_dir, n_samples = 20000, n_plots=10)
 
     #model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
     #check_diffusion(model, n_samples=20000,num_plots=3)

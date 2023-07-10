@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 from sbi.analysis import pairplot
 from models.diffusion import *
 from models.SNF import anneal_to_energy, energy_grad
-from utils import *
+from utils_scatterometry import *
 from losses import *
 import scipy
 import pandas as pd
@@ -160,7 +160,7 @@ if __name__ == '__main__':
                                   nn.Linear(256, 256), nn.ReLU(),
                                   nn.Linear(256, 256), nn.ReLU(),
                                   nn.Linear(256, 23)).to(device)
-    src_dir = 'examples/scatterometry'
+    src_dir = '.'
     forward_model.load_state_dict(
         torch.load(os.path.join(src_dir, 'surrogate.pt'), map_location=torch.device(device)))
     for param in forward_model.parameters():
@@ -177,7 +177,7 @@ if __name__ == '__main__':
     x_test = torch.rand(n_samples_y, xdim, device=device) * 2 - 1
     y_test = forward_model(x_test)
     y_test = y_test + b * torch.randn_like(y_test) + y_test * a * torch.randn_like(y_test)
-    n_epochs = 2000
+    n_epochs = 500
 
     score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,a,b,y,lambd_bd))[0]
     score_prior = lambda x: -x
@@ -185,7 +185,7 @@ if __name__ == '__main__':
     hidden_layers = [512,512]
     model = create_diffusion_model2(xdim,ydim,hidden_layers)
     optimizer = Adam(model.a.parameters(), lr=1e-4)
-    loss_fn = PINNLoss(initial_condition = score_posterior, boundary_condition = score_prior, lam=.1)
+    loss_fn = PINNLoss4(initial_condition = score_posterior, lam=.1, pde_loss='FPE')
     #loss_fn = ErmonLoss(lam=.1)
 
     train_dir = os.path.join(src_dir,loss_fn.name, 'L1', 'lam=.1')
