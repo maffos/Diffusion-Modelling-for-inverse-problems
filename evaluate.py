@@ -10,7 +10,7 @@ def traverse_subfolders(source_dir, exclude = None):
         for dir_name in dirs:
             subfolder_path = os.path.join(root, dir_name)
             results_dir = os.path.join(subfolder_path, "results")
-            if not exclude in subfolder_path:
+            if not 'exclude' in subfolder_path:
                 if os.path.isdir(results_dir):
                     results_csv = os.path.join(results_dir, "results.csv")
                     if os.path.isfile(results_csv):
@@ -53,10 +53,10 @@ def compare_2_methods(path_method_1, path_method_2):
     print('Method2: ', score2)
     return best_params, best_score
 # Usage
-source_directory = 'examples/scatterometry/scatterometry_runs_new/CFM'
-#score, params = traverse_subfolders(source_directory)
-path1 = 'examples/scatterometry/dsm-loss'
-path2 = 'examples/scatterometry/scatterometry_runs_new/CFM/ErmonLoss/4layer/L2/lam:0.1/lr:0.0001/results'
-params,score = compare_2_methods(path1,path2)
+source_directory = 'examples/scatterometry/25-08-23/FPE/PINNLoss3/'
+score, params = traverse_subfolders(source_directory)
+#path1 = 'examples/scatterometry/dsm-loss'
+#path2 = 'examples/scatterometry/scatterometry_runs_new/CFM/ErmonLoss/4layer/L2/lam:0.1/lr:0.0001/results'
+#params,score = compare_2_methods(path1,path2)
 print(params)
 print(score)

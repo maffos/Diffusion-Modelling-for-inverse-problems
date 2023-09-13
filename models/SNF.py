@@ -306,6 +306,22 @@ def langevin_step(x, stepsize, energy, lang_steps):
 # forward_model: pretrained forward_model (needed for forward KL loss)
 # a, b: error model parameters
 # get_prior_log_likelihood: method giving log prior
+def train_SNF_epoch(optimizer, snf, epoch_data_loader,forward_model,a,b,get_prior_log_likelihood):
+    mean_loss = 0
+    for k, (x, y) in enumerate(epoch_data_loader()):
+        cur_batch_size = len(x)
+        loss = 0
+        out = snf.backward(x, y)
+        invs = out[0]
+        jac_inv = out[1]
+
+        l5 = 0.5* torch.sum(invs**2, dim=1) - jac_inv
+        loss += torch.sum(l5) / cur_batch_size
+        mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    return mean_loss
 
 
 

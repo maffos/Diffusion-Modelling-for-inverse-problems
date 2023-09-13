@@ -15,6 +15,38 @@ def create_diffusion_model(xdim, ydim, embed_dim, hidden_layers):
     score_net = TemporalMLP_small(**net_params).to(device)
     reverse_process = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=True)
     return reverse_process
+def train_diffusion_epoch(optimizer, loss_fn, model, epoch_data_loader, t_min):
+    mean_loss = 0
+    logger_info = {}
+
+    for k, (x, y) in enumerate(epoch_data_loader()):
+
+        t = sample_t(model,x)
+        loss = loss_fn(model,x,t,y)
+        if isinstance(loss, tuple):
+            loss_info = loss[1]
+            loss = loss[0]
+            for key,value in loss_info.items():
+                try:
+                    logger_info[key] = logger_info[key] * k / (k + 1) + value.item() / (k + 1)
+                except:
+                    logger_info[key] = 0
+                    logger_info[key] = logger_info[key] * k / (k + 1) + value.item() / (k + 1)
+
+        if torch.min(t) < t_min:
+            t_min = torch.min(t)
+        if torch.isnan(loss):
+            for key, value in loss_info.items():
+                print(key + ':' + str(value))
+            raise ValueError(
+                'Loss is nan, min sampled t was %f. Minimal t during training was %f' % (torch.min(t), t_min))
+        #loss = model.dsm(x,y).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
+    return mean_loss, logger_info, t_min
 
 def create_diffusion_model2(xdim, ydim,hidden_layers):
 

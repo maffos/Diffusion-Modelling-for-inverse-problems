@@ -16,6 +16,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # mcmc parameters for "discovering" the ground truth
 NOISE_STD_MCMC = 0.5
 METR_STEPS = 1000
+RANDOM_STATE = 13
 
 def train_epoch(optimizer, loss_fn, model, epoch_data_loader, t_min):
     mean_loss = 0
@@ -59,7 +60,7 @@ def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, ba
     for i in range(num_epochs):
         data_loader = get_epoch_data_loader(batch_size, forward_model, a, b, lambd_bd)
         loss,logger_info, t_min = train_epoch(optimizer, loss_fn, model, data_loader, t_min)
-        prog_bar.set_description('determ diffusion loss:{:.3f}'.format(loss))
+        prog_bar.set_description('diffusion loss:{:.3f}'.format(loss))
         logger.add_scalar('Train/Loss', loss, i)
         for key,value in logger_info.items():
             logger.add_scalar('Train/'+key, value, i)
@@ -83,8 +84,8 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
         kl2_sum = 0.
         kl2_vals = []
         nbins = 75
-        # randomly select some y's to plot the posterior (otherwise we would get ~2000 plots)
-        plot_y = np.random.choice(np.arange(n_samples_y), size=n_plots,replace=False)  
+        #hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
+        plot_y = [0,5,6,20,23,42,50,77,81,93]
         prog_bar = tqdm(total=n_samples_y)
         for i, y in enumerate(ys):
             # testing
@@ -172,12 +173,10 @@ if __name__ == '__main__':
     xdim = 3
     ydim = 23
 
-    n_samples_y = 50
-    n_samples_x = 5000
-    x_test = torch.rand(n_samples_y, xdim, device=device) * 2 - 1
-    y_test = forward_model(x_test)
-    y_test = y_test + b * torch.randn_like(y_test) + y_test * a * torch.randn_like(y_test)
+    n_samples_y = 100
+    n_samples_x = 30000
     n_epochs = 500
+    x_test,y_test = get_dataset(forward_model,a,b,size=n_samples_y)
 
     score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,a,b,y,lambd_bd))[0]
     score_prior = lambda x: -x

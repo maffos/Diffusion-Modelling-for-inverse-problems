@@ -13,6 +13,16 @@ def get_epoch_data_loader(batch_size, forward_model,a, b,lambd_bd):
 
     return epoch_data_loader
 
+def get_dataset(forward_model,a,b,size=100):
+    random_state = 13
+    torch.random_state(random_state)
+    xdim=3
+
+    xs = torch.rand(size, xdim, device=device) * 2 - 1
+    ys = forward_model(xs)
+    ys = ys + b * torch.randn_like(ys) + ys * a * torch.randn_like(ys)
+
+    return xs, ys
 
 # returns (negative) log_posterior evaluation for the scatterometry model
 # likelihood is determined by the error model

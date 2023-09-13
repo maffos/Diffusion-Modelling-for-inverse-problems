@@ -136,9 +136,11 @@ class ScoreFPELoss(nn.Module):
             raise ValueError('No valid value for divergence method specified')
 
         ds_dt = batch_gradient(s,t)
-        grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2,dim=1).view(-1,1) + (x_t[:, None, :] @ s[:, :, None]).view(-1,1),
-        x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
+        #grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2,dim=1).view(-1,1) + (x_t[:, None, :] @ s[:, :, None]).view(-1,1),
+        #x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
 
+        #just to try out as in the original paper without the scalar product term
+        grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2, dim=1).view(-1, 1),x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
         if metric == 'L1':
             loss = torch.mean(torch.abs(ds_dt - .5 * beta * grad_x), dim=1).view(batch_size, 1)
         elif metric == 'L2':
@@ -322,7 +324,9 @@ class PINNLoss3(nn.Module):
         s_0 = model.a(x, t0, y)/g_0
         s = model.a(x_t, t,y)/g
 
-        initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
+        #initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
+        #    batch_size, 1)
+        initial_condition_loss = self.lam2 * torch.mean(torch.abs(s_0 - self.initial_condition(x, y)), dim=1).view(
             batch_size, 1)
         #dsm_loss = self.dsm_loss(s, std, target)
         if self.pde_loss.name == 'CFMLoss':

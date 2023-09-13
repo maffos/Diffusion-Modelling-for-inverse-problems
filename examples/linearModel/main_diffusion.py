@@ -295,7 +295,7 @@ if __name__ == '__main__':
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
 
     #define parameters
-    src_dir = 'ScoreFlowMatching/3layers'
+    src_dir = 'test'
     hidden_layers = [512,512,512]
     resume_training = False
     pde_loss = 'CFM'
@@ -305,7 +305,7 @@ if __name__ == '__main__':
     #define models
     model = create_diffusion_model2(xdim,ydim, hidden_layers=hidden_layers)
     #loss_fn =PINNLoss2(initial_condition=score_posterior, boundary_condition=lambda x: -x, pde_loss=pde_loss, lam=lam)
-    loss_fn = PINNLoss4(initial_condition=score_posterior, lam=.1,lam2=1., pde_loss = pde_loss)
+    loss_fn = PINNLoss3(initial_condition=score_posterior, lam=.1,lam2=1., pde_loss = pde_loss)
     #loss_fn = ScoreFlowMatchingLoss(lam=.1)
     #loss_fn = PINNLoss3(initial_condition = score_posterior, lam = .1, lam2 = 1)
     #loss_fn = ErmonLoss(lam=0.1, pde_loss = 'FPE')
@@ -332,7 +332,7 @@ if __name__ == '__main__':
         os.makedirs(log_dir)
 
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=5000, resume_training = resume_training)
+    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=200, resume_training = resume_training)
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
     evaluate(model, x_test[:100], y_test[:100], out_dir, n_samples = 20000, n_plots=10)
