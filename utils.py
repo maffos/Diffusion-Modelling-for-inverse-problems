@@ -1,9 +1,10 @@
+import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 import torch
 import torch.utils.data
 import os
 import itertools
-import matplotlib.pyplot as plt
 from torch import nn
 
 __all__ = ['load_dataset', 'generate_dataset']
@@ -176,6 +177,60 @@ def div_estimator(s,x,num_samples=1, rademacher = True):
 
     div /= num_samples
     return div
+
+def plot_density(samples, nbins, title, show = False, cmap = 'viridis', limits=None, fname = None):
+    """
+    Plot the density of the samples in a grid.
+    Parameters:
+    - samples: A numpy array of shape (n_samples, n_dimensions).
+    - limit: A tuple defining the lower and upper limit for the histogram bin range.
+    """
+    n_samples, n_dims = samples.shape
+    fig, axes = plt.subplots(n_dims, n_dims, figsize=(15, 15))
+    for i in range(n_dims):
+        for j in range(n_dims):
+            if i == j:
+                # 1D histogram on the diagonal
+                if limits:
+                    bins = np.linspace(limits[0], limits[1], nbins)
+                else:
+                    bins = np.linspace(np.min(samples[:, i]), np.max(samples[:, i]), nbins)
+
+                sns.histplot(samples[:, i], ax=axes[i, j], kde=True, element = 'step', bins=bins, color='blue')
+                axes[i, j].set_xlim(bins[0], bins[-1])
+                axes[i,j].set_ylabel('')
+                # Removing y axis labels for diagonal plots
+                axes[i, j].set_yticklabels([])
+            elif i < j:
+                # 2D histogram off-diagonal
+                if limits:
+                    hist_range = [limits, limits]
+                else:
+                    hist_range = [(np.min(samples[:, i]), np.max(samples[:, i])),
+                                  (np.min(samples[:, j]), np.max(samples[:, j]))]
+
+                H, xedges, yedges = np.histogram2d(samples[:, j], samples[:, i], bins=nbins, range=hist_range)
+                axes[i, j].imshow(H.T, origin='lower', aspect='auto', interpolation='nearest',
+                                  extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
+                                  cmap=cmap)
+                axes[i, j].set_xlim(hist_range[0])
+                axes[i, j].set_ylim(hist_range[1])
+                # For non-diagonal plots, share x and y
+                if j > i+1:
+                    axes[i, j].set_yticklabels([])
+
+                axes[i, j].set_xticklabels([])
+            else:
+                # For the lower triangular plots, we make them blank
+                axes[i, j].axis('off')
+    fig.suptitle(title, fontsize = 30)
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname)
+    if show:
+        plt.show()
+    else:
+        plt.close()
 
 def make_image(pred_samples,x_true, num_epochs, output_dir = None, inds=None, show_plot = False, savefig = True):
 

@@ -15,6 +15,8 @@ from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 from torch.distributions import MultivariateNormal
+import scipy
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # define parameters of the forward and inverse problem
@@ -231,87 +233,122 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
     torch.save(model.a.state_dict(), current_model_path)
     return model
 
-def evaluate(model, xs,ys, save_dir, n_samples = 2000, n_plots = 10):
-
+def evaluate(model,ys, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
+    n_samples_y = ys.shape[0]
     model.eval()
-    with torch.no_grad():
+    with (torch.no_grad()):
+        nll_diffusion = []
+        nll_true = []
+        kl2_sum = 0.
+        mse_score_vals = []
+        kl2_vals = []
+        nbins = 200
+        # hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
+        plot_ys = [3,5,22,39,51,53,60,71,81,97]
 
-        mse_score = 0
-        nll_sample = 0
-        nll_true = 0
-        kl_div = 0
-        # calculate MSE of score on test set
-        t0 = torch.zeros(xs.shape[0], requires_grad=False).view(-1, 1)
-        g_0 = model.base_sde.g(t0, xs)
-        score_predict = model.a(xs, t0, ys)/g_0
-        score_true = score_posterior(xs, ys)
-        mse_score += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
-
-        plot_ys = np.random.choice(ys.shape[0], size=n_plots,replace=False)
-        prog_bar = tqdm(total=len(xs))
-        for i,y in enumerate(ys):
+        prog_bar = tqdm(total=n_samples_y)
+        for i, y in enumerate(ys):
+            # testing
+            hist_true_sum = np.zeros((nbins, nbins))
+            hist_diffusion_sum = np.zeros((nbins, nbins))
+            nll_sum_true = 0
+            nll_sum_diffusion = 0
+            mse_score_sum = 0
             posterior = get_posterior(y)
-            x_pred = get_grid(model.to(device), y.to(device), xdim=2, ydim=2, num_samples=n_samples)
 
+            for _ in range(n_repeats):
+                x_pred = get_grid(model, y, xdim, ydim, num_samples=n_samples_x)
+                x_true = posterior.sample((n_samples_x,))
+
+                # calculate MSE of score on test set
+                t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1)
+                g_0 = model.base_sde.g(t0, x_true)
+                inflated_ys = torch.ones_like(x_true) * y
+                score_predict = model.a(x_true, t0, inflated_ys) / g_0
+                score_true = score_posterior(x_true, inflated_ys)
+                mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
+
+                # generate histograms
+                hist_true, _ = np.histogramdd(x_true, bins=(nbins, nbins),
+                                              range=((-4, 4), (-4, 4)))
+                hist_diffusion, _ = np.histogramdd(x_pred, bins=(nbins, nbins),
+                                                   range=((-4, 4), (-4, 4)))
+
+                hist_true_sum += hist_true
+                hist_diffusion_sum += hist_diffusion
+
+                # calculate negaitve log likelihood of the samples
+                nll_sum_true -= torch.mean(posterior.log_prob(x_true))
+                nll_sum_diffusion -= torch.mean(posterior.log_prob(torch.from_numpy(x_pred)))
+
+            # only plot samples of the last repeat otherwise it gets too much and plot only for some fixed y
             if i in plot_ys:
-                # log_plot(prior)
-                # fig, ax = conditional_pairplot(likelihood, condition=xs[0], limits=[[-3, 3], [-3, 3]])
-                # fig.suptitle('Likelihood at x=(%.2f,%.2f)'%(xs[0,0],xs[0,1]))
-                # fig.show()
-                fig, ax = conditional_pairplot(posterior, condition=y, limits=[[-3, 3], [-3, 3]])
+                fig, ax = conditional_pairplot(posterior, condition=y, limits=[[-4, 4], [-4, 4]])
                 fig.suptitle('Posterior at y=(%.2f,%.2f)' % (y[0], y[1]))
-                fname = os.path.join(save_dir, 'posterior-true%d.png'%i)
-                plt.savefig(fname)
-                plt.close()
-                # x_pred = sample(model, y=ys[0], dt = .005, n_samples=n_samples)
-                fig, ax = pairplot([x_pred], limits=[[-3, 3], [-3, 3]])
-                fig.suptitle('N=%d samples from the posterior at y=(%.2f,%.2f)' % (n_samples, y[0], y[1]))
-                fname = os.path.join(save_dir, 'posterior-diffusion%d.png'%i)
+                fname = os.path.join(out_dir, 'posterior-true%d.png' % i)
                 plt.savefig(fname)
                 plt.close()
 
-            x_true = posterior.sample((n_samples,))
-            nll_sample += -torch.mean(posterior.log_prob(torch.from_numpy(x_pred)))
-            #calculate nll of true samples from posterior for reference
-            nll_true += -torch.mean(posterior.log_prob(x_true))
-            kl_div += nn.functional.kl_div(torch.from_numpy(x_pred), x_true).mean()
-            prog_bar.set_description('NLL samples: %.4f NLL true %.4f'%(nll_sample,nll_true))
+                fig, ax = pairplot([x_pred], limits = [[-4,4],[-4,4]])
+                fig.suptitle('PINN-Loss')
+                fname = os.path.join(out_dir, 'posterior-pinn-%d.png' % i)
+                plt.savefig(fname)
+                plt.close()
+
+            hist_true = hist_true_sum / hist_true_sum.sum()
+            hist_diffusion = hist_diffusion_sum / hist_diffusion_sum.sum()
+            hist_true += epsilon
+            hist_diffusion += epsilon
+            # re-normalize after adding epsilon
+            hist_true /= hist_true.sum()
+            hist_diffusion /= hist_diffusion.sum()
+
+            kl2 = np.sum(scipy.special.rel_entr(hist_true, hist_diffusion))
+            kl2_sum += kl2
+            kl2_vals.append(kl2)
+            nll_true.append(nll_sum_true.item() / n_repeats)
+            nll_diffusion.append(nll_sum_diffusion.item() / n_repeats)
+            mse_score_vals.append(mse_score_sum.item() / n_repeats)
+            prog_bar.set_description(
+                'KL_diffusion: {:.3f}'.format(np.mean(kl2_vals)))
             prog_bar.update()
 
-        mse_score /= xs.shape[0]
-        nll_sample /= xs.shape[0]
-        nll_true /= xs.shape[0]
-        kl_div += xs.shape[0]
-
+        prog_bar.close()
+        kl2_vals = np.array(kl2_vals)
+        kl2_var = np.sum((kl2_vals - kl2_sum / n_samples_y) ** 2) / n_samples_y
+        nll_true = np.array(nll_true)
+        nll_diffusion = np.array(nll_diffusion)
         df = pd.DataFrame(
-            {'KL': np.array([kl_div]), 'NLL_true': np.array([nll_true]), 'NLL_diffusion': np.array([nll_sample]), 'MSE': np.array([mse_score])})
-        df.to_csv(os.path.join(save_dir, 'results.csv'))
-        print('MSE: %.4f, NLL of samples: %.4f, NLL of true samples: %.4f, KL Div: %.4f'%(mse_score,nll_sample,nll_true, kl_div))
+            {'KL2': kl2_vals, 'NLL_true': nll_true, 'NLL_diffusion': nll_diffusion, 'MSE': np.array(mse_score_vals)})
+        df.to_csv(os.path.join(out_dir, 'results.csv'))
+        print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
 
 if __name__ == '__main__':
 
     #create data
     xs,ys = generate_dataset(n_samples=100000)
-    x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.8, random_state = 7)
+    x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.9, random_state = 7)
 
     #define parameters
-    src_dir = 'test'
+    src_dir = 'ScoreFPE/3layer/L1-pde/L2-IC'
     hidden_layers = [512,512,512]
     resume_training = False
-    pde_loss = 'CFM'
+    pde_loss = 'FPE'
     lam = .1
+    lam2 = 1.
     lr = 1e-4
+    metric = 'L1'
 
     #define models
     model = create_diffusion_model2(xdim,ydim, hidden_layers=hidden_layers)
     #loss_fn =PINNLoss2(initial_condition=score_posterior, boundary_condition=lambda x: -x, pde_loss=pde_loss, lam=lam)
-    loss_fn = PINNLoss3(initial_condition=score_posterior, lam=.1,lam2=1., pde_loss = pde_loss)
+    loss_fn = PINNLoss4(initial_condition=score_posterior, lam=lam,lam2=lam2, pde_loss = pde_loss, metric = metric)
     #loss_fn = ScoreFlowMatchingLoss(lam=.1)
     #loss_fn = PINNLoss3(initial_condition = score_posterior, lam = .1, lam2 = 1)
     #loss_fn = ErmonLoss(lam=0.1, pde_loss = 'FPE')
-    optimizer = Adam(model.a.parameters(), lr = 1e-4)
+    optimizer = Adam(model.a.parameters(), lr = lr)
 
-    train_dir = os.path.join(src_dir,loss_fn.name, 'lam=0.1')
+    train_dir = os.path.join(src_dir,loss_fn.name, 'lam:{}'.format(lam), 'lam2:{}'.format(lam2))
     if resume_training:
         model.a.load_state_dict(torch.load(os.path.join(train_dir,'current_model.pt'),map_location=torch.device(device)))
         out_dir = os.path.join(train_dir, 'results_resume')
@@ -332,10 +369,11 @@ if __name__ == '__main__':
         os.makedirs(log_dir)
 
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=200, resume_training = resume_training)
+    model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=5000, resume_training = resume_training)
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
-    evaluate(model, x_test[:100], y_test[:100], out_dir, n_samples = 20000, n_plots=10)
+    kl_div, nll, nll_diffusion, mse = evaluate(model, y_test[:100], out_dir, n_samples_x = 30000, n_repeats = 5)
 
+    print('KL: %.3f, NLL: %.3f, NLL-diffusion: %.3f, MSE: %.7f'%(kl_div,nll,nll_diffusion,mse))
     #model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
     #check_diffusion(model, n_samples=20000,num_plots=3)

@@ -106,26 +106,29 @@ class DSMLoss(nn.Module):
 
 class CFMLoss(nn.Module):
 
-    def __init__(self):
+    def __init__(self, metric = 'L2'):
         super(CFMLoss, self).__init__()
         self.name = 'CFMLoss'
-
+        self.metric = metric
     def forward(self, model,s,t,beta,target,std):
-        v = batch_gradient(s,t)
-        # u=.5*beta*mu*(target*std/(1-mu**2)-1) #erste version
+        ds_dt = batch_gradient(s,t)
         u = .5 * target * beta * model.base_sde.mean_weight(t) ** 2
-        loss = torch.sum((std ** 5 * v-u) ** 2, dim=1)
+        if self.metric == 'L2':
+            loss = torch.sum((std**3 * ds_dt-u) ** 2, dim=1)
+        elif self.metric == 'L1':
+            loss = torch.sum(torch.abs(std**3*ds_dt - u), dim=1)
 
         return loss
         
 class ScoreFPELoss(nn.Module):
 
-    def __init__(self):
+    def __init__(self, metric = 'l1'):
 
         super(ScoreFPELoss,self).__init__()
         self.name = 'FPELoss'
+        self.metric = metric
 
-    def forward(self, s, x_t, t, beta, metric = 'L1', divergence_method = 'exact'):
+    def forward(self, s, x_t, t, beta, divergence_method = 'exact'):
         batch_size = x_t.shape[0]
 
         if divergence_method == 'exact':
@@ -136,15 +139,15 @@ class ScoreFPELoss(nn.Module):
             raise ValueError('No valid value for divergence method specified')
 
         ds_dt = batch_gradient(s,t)
-        #grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2,dim=1).view(-1,1) + (x_t[:, None, :] @ s[:, :, None]).view(-1,1),
-        #x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
+        grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2,dim=1).view(-1,1) + (x_t[:, None, :] @ s[:, :, None]).view(-1,1),
+        x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
 
         #just to try out as in the original paper without the scalar product term
-        grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2, dim=1).view(-1, 1),x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
-        if metric == 'L1':
+        #grad_x = torch.autograd.grad(divx_s + torch.sum(s ** 2, dim=1).view(-1, 1),x_t, grad_outputs=torch.ones_like(divx_s), retain_graph=True)[0]
+        if self.metric == 'L1':
             loss = torch.mean(torch.abs(ds_dt - .5 * beta * grad_x), dim=1).view(batch_size, 1)
-        elif metric == 'L2':
-            loss = torch.sum((ds_dt-0.5*beta*grad_x)**2, dim = 1).view(batch_size,1)
+        elif self.metric == 'L2':
+            loss = torch.mean((ds_dt-0.5*beta*grad_x)**2, dim = 1).view(batch_size,1)
         else:
             loss = torch.mean((ds_dt - .5 * beta * grad_x) ** 2, dim=1).view(batch_size, 1)
         return loss
@@ -340,20 +343,21 @@ class PINNLoss3(nn.Module):
 #calculates PINN loss without boundary condition term but with dsm loss
 class PINNLoss4(nn.Module):
 
-    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'HJB'):
+    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'FPE',ic_metric = 'L1', **kwargs):
 
         super(PINNLoss4, self).__init__()
         self.lam = lam
         self.lam2 = lam2
         self.initial_condition = initial_condition
         if pde_loss == 'HJB':
-            self.pde_loss = ScoreHJBLoss()
+            self.pde_loss = ScoreHJBLoss(**kwargs)
         elif pde_loss == 'FPE':
-            self.pde_loss = ScoreFPELoss()
+            self.pde_loss = ScoreFPELoss(**kwargs)
         else:
-            self.pde_loss = CFMLoss()
+            self.pde_loss = CFMLoss(**kwargs)
         self.dsm_loss = DSMLoss()
         self.name = 'PINNLoss4'
+        self.ic_metric = ic_metric
 
     def forward(self,model,x,t,y):
 
@@ -366,8 +370,10 @@ class PINNLoss4(nn.Module):
         s_0 = model.a(x, t0, y)/g_0
         s = model.a(x_t, t,y)/g
 
-        initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
-            batch_size, 1)
+        if self.ic_metric == 'L2':
+            initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(batch_size, 1)
+        elif self.ic_metric == 'L1':
+            initial_condition_loss = self.lam2 * torch.mean(torch.abs(s_0 - self.initial_condition(x, y)), dim=1).view(batch_size, 1)
         dsm_loss = self.dsm_loss(s,std,target)
         #dsm_loss = self.dsm_loss(s, std, target)
         if self.pde_loss.name == 'CFMLoss':

@@ -3,26 +3,26 @@ from sbi.analysis import pairplot
 from models.diffusion import *
 from models.SNF import anneal_to_energy, energy_grad
 from utils_scatterometry import *
+from utils import product_dict
 from losses import *
 import scipy
 import pandas as pd
 from tqdm import tqdm
 import os
+import shutil
 import torch
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
 # mcmc parameters for "discovering" the ground truth
 NOISE_STD_MCMC = 0.5
 METR_STEPS = 1000
-RANDOM_STATE = 13
 
 def train_epoch(optimizer, loss_fn, model, epoch_data_loader, t_min):
     mean_loss = 0
     logger_info = {}
-
+    model.train()
     for k, (x, y) in enumerate(epoch_data_loader()):
 
         t = sample_t(model,x)
@@ -61,7 +61,7 @@ def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, ba
     for i in range(num_epochs):
         data_loader = get_epoch_data_loader(batch_size, forward_model, a, b, lambd_bd)
         loss,logger_info, t_min = train_epoch(optimizer, loss_fn, model, data_loader, t_min)
-        prog_bar.set_description('diffusion loss:{:.3f}'.format(loss))
+        prog_bar.set_description('Loss:{:.3f}'.format(loss))
         logger.add_scalar('Train/Loss', loss, i)
         for key,value in logger_info.items():
             logger.add_scalar('Train/'+key, value, i)
@@ -86,7 +86,7 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
     mse_score_vals = []
     nbins = 75
     # randomly select some y's to plot the posterior (otherwise we would get ~2000 plots)
-    plot_y = [0,5,6,20,23,42,50,77,81,93]
+    plot_y = [0,5,6,20,23,42,50,77,81,93]  
     prog_bar = tqdm(total=n_samples_y)
     for i, y in enumerate(ys):
         # testing
@@ -105,7 +105,7 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
             # calculate MSE of score on test set
             t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
             g_0 = model.base_sde.g(t0, x_true_tensor)
-            score_predict = model.a(x_true_tensor, t0.to(device), inflated_ys.to(device)) / g_0
+            score_predict = model.a(x_true_tensor, t0.to(device), inflated_ys.to(device)) / g_0             
             score_true = score_posterior(x_true_tensor,inflated_ys)
             #score_true = -energy_grad(x_true_tensor,mcmc_energy)
             mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
@@ -117,26 +117,24 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
 
             hist_mcmc_sum += hist_mcmc
             hist_diffusion_sum += hist_diffusion
-
-            # calculate negaitve log likelihood of the samples
+             # calculate negaitve log likelihood of the samples
             nll_sum_mcmc += mcmc_energy(x_true_tensor).sum() / n_samples_x
-            nll_sum_diffusion += mcmc_energy(torch.from_numpy(x_pred).to(device)).sum() / n_samples_x
-
-        # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
+            nll_sum_diffusion += mcmc_energy(torch.from_numpy(x_pred).to(device)).sum() /n_samples_x
+         # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
         if i in plot_y:
             fig, ax = pairplot([x_true], limits = [[-1,1],[-1,1],[-1,1]])
-            fig.suptitle('MCMC' % (n_samples_x))
+            fig.suptitle('MCMC')
             fname = os.path.join(out_dir, 'posterior-mcmc-%d.png' % i)
             plt.savefig(fname)
             plt.close()
 
             fig, ax = pairplot([x_pred], limits = [[-1,1],[-1,1],[-1,1]])
-            fig.suptitle('PINN-Loss' % (n_samples_x))
+            fig.suptitle('PINN-Loss')
             fname = os.path.join(out_dir, 'posterior-diffusion-limits%d.png' % i)
             plt.savefig(fname)
             plt.close()
             fig, ax = pairplot([x_pred])
-            fig.suptitle('PINN-Loss' % (n_samples_x))
+            fig.suptitle('PINN-Loss')
             fname = os.path.join(out_dir, 'posterior-diffusion-nolimits%d.png' % i)
             plt.savefig(fname)
             plt.close()
@@ -147,7 +145,6 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
         hist_diffusion += epsilon
         hist_mcmc /= hist_mcmc.sum()
         hist_diffusion /= hist_diffusion.sum()
-
         kl2 = np.sum(scipy.special.rel_entr(hist_mcmc, hist_diffusion))
         kl2_sum += kl2
         kl2_vals.append(kl2)
@@ -155,7 +152,7 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
         nll_diffusion.append(nll_sum_diffusion.item() / n_repeats)
         mse_score_vals.append(mse_score_sum.item()/n_repeats)
         prog_bar.set_description(
-            'KL_diffusion: {:.3f}'.format(np.mean(kl2_vals)))
+                'KL_diffusion: {:.3f}'.format(np.mean(kl2_vals)))
         prog_bar.update()
 
     prog_bar.close()
@@ -163,8 +160,7 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
     kl2_var = np.sum((kl2_vals - kl2_sum / n_samples_y) ** 2) / n_samples_y
     nll_mcmc = np.array(nll_mcmc)
     nll_diffusion = np.array(nll_diffusion)
-    df = pd.DataFrame(
-        {'KL2': kl2_vals, 'NLL_mcmc': nll_mcmc,'NLL_diffusion': nll_diffusion,'MSE':np.array(mse_score_vals)})
+    df = pd.DataFrame({'KL2': kl2_vals, 'NLL_mcmc': nll_mcmc,'NLL_diffusion': nll_diffusion,'MSE':np.array(mse_score_vals)})
     df.to_csv(os.path.join(out_dir, 'results.csv'))
     print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
         
@@ -174,9 +170,9 @@ if __name__ == '__main__':
                                   nn.Linear(256, 256), nn.ReLU(),
                                   nn.Linear(256, 256), nn.ReLU(),
                                   nn.Linear(256, 23)).to(device)
-    src_dir = '.'
+    surrogate_fn = 'models/surrogate/scatterometry_surrogate.pt'
     forward_model.load_state_dict(
-        torch.load(os.path.join(src_dir, 'surrogate.pt'), map_location=torch.device(device)))
+        torch.load(surrogate_fn, map_location=torch.device(device)))
     for param in forward_model.parameters():
         param.requires_grad = False
 
@@ -188,27 +184,75 @@ if __name__ == '__main__':
 
     n_samples_y = 100
     n_samples_x = 30000
-    n_epochs = 20000
     x_test,y_test = get_dataset(forward_model,a,b,size=n_samples_y)
+    n_epochs = 20000
+
 
     score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,a,b,y,lambd_bd))[0]
     score_prior = lambda x: -x
 
-    hidden_layers = [512,512,512]
-    model = create_diffusion_model2(xdim,ydim,hidden_layers)
-    optimizer = Adam(model.a.parameters(), lr=1e-4)
-    loss_fn = PINNLoss4(initial_condition = score_posterior, lam=.00001,lam2=.1, pde_loss='CFM', ic_metric = 'L1')
-    #loss_fn = ErmonLoss(lam=.1)
+    params = {'loss_fn': ['PINNLoss4'],
+    'lr': [1e-4],
+    'lam': [1.,.1,.001],
+    'lam2':[1.,.1],
+    'pde_loss': ['FPE'],
+    'metric': ['L1'],
+    'ic_metric':['L1'],
+    'hidden_layers':['3layer']}
+    
+    resume_training = False
+    src_dir = 'new_folder_strucutre_scatterometry'
+    for param_configuration in product_dict(**params):
+        skip = False
+        lr = param_configuration.pop('lr')
+        num_layers = param_configuration.pop('hidden_layers')
+        if num_layers == '2layer':
+            hidden_layers = [512,512]
+        elif num_layers == '3layer':
+            hidden_layers = [512,512,512]
+        elif num_layers== '4layer':
+            hidden_layers = [512,512,512,512]
+        else:
+            hidden_layers = [512,512,512,512,512]
+        loss_fn = param_configuration.pop('loss_fn')
+        if loss_fn == 'PINNLoss2':
+            loss_fn = PINNLoss2(initial_condition = score_posterior,boundary_condition=score_prior,**param_configuration)
+        elif loss_fn == 'PINNLoss4':
+            loss_fn = PINNLoss4(initial_condition= score_posterior,**param_configuration)
+        elif loss_fn == 'PINNLoss3':
+            loss_fn = PINNLoss3(initial_condition = score_posterior, **param_configuration)
+        elif loss_fn == 'ErmonLoss':
+            if 'lam2' in param_configuration.keys():
+                _ = param_configuration.pop('lam2')
+            if 'ic_metric' in param_configuration.keys():
+                _ = param_configuration.pop('ic_metric')
+            loss_fn = ErmonLoss(**param_configuration)
+        else:
+            raise ValueError('No correct loss fn specified')
+        if param_configuration['metric'] == 'L1' and param_configuration['pde_loss'] == 'CFM':
+            skip = True
+        if not skip:
+            model = create_diffusion_model2(xdim,ydim,hidden_layers)
+            optimizer = Adam(model.a.parameters(), lr=lr)
 
-    train_dir = os.path.join(src_dir,'test','CFM', loss_fn.name, 'L2', 'L1', 'lam:1.', 'lam2:0.1')
-    log_dir = os.path.join(train_dir, 'logs')
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    out_dir = os.path.join(train_dir, 'results')
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-
-    print('---------------------')
-    model = train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir, log_dir = log_dir)
-    print('----------------------')
-    evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=n_samples_x)
+            if loss_fn.name == 'ErmonLoss':
+                train_dir = os.path.join(src_dir,param_configuration['pde_loss'], loss_fn.name, num_layers, param_configuration['metric'], 'lam:{}'.format(param_configuration['lam']))
+            else:
+                train_dir = os.path.join(src_dir,param_configuration['pde_loss'], loss_fn.name, num_layers, param_configuration['metric'],param_configuration['ic_metric'], 'lam:{}'.format(param_configuration['lam']),'lam2:{}'.format(param_configuration['lam2']))
+            log_dir = os.path.join(train_dir, 'logs')
+            
+            if os.path.exists(log_dir) and not resume_training:
+                shutil.rmtree(log_dir)
+                
+            out_dir = os.path.join(train_dir, 'results')
+            if os.path.exists(out_dir) and not resume_training:
+                shutil.rmtree(out_dir)
+                
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir)
+            print('-----------------')
+            print(vars(loss_fn))
+            model = train(model, optimizer, loss_fn,forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir, log_dir = log_dir)
+            evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=n_samples_x)

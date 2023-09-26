@@ -15,10 +15,10 @@ def get_epoch_data_loader(batch_size, forward_model,a, b,lambd_bd):
 
 def get_dataset(forward_model,a,b,size=100):
     random_state = 13
-    torch.random_state(random_state)
+    rand_gen = torch.manual_seed(random_state)
     xdim=3
 
-    xs = torch.rand(size, xdim, device=device) * 2 - 1
+    xs = torch.rand(size, xdim, generator=rand_gen, device=device) * 2 - 1
     ys = forward_model(xs)
     ys = ys + b * torch.randn_like(ys) + ys * a * torch.randn_like(ys)
 
