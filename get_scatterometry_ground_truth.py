@@ -33,34 +33,38 @@ NOISE_STD_MCMC = 0.5
 METR_STEPS = 1000
 RANDOM_STATE = 13
 # hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
-plot_ys = [3,5,22,39,51,53,60,71,81,97]
+plot_y = [0, 5, 6, 20, 23, 42, 50, 77, 81, 93]
 n_repeats = 10
 
 def get_gt_samples(i,j):
     x_true = anneal_to_energy(torch.rand(n_samples_x, xdim, device=device) * 2 - 1, mcmc_energy, METR_STEPS,
                               noise_std=NOISE_STD_MCMC)[0].detach().cpu().numpy()
-    filename = os.path.join(out_dir, str(i),str(j))
-    np.save(filename, x_true)
+    out_dir = os.path.join(src_dir, str(i))
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+    filename = os.path.join(out_dir,'%d.npy'%j)
+    with open(filename, 'wb') as f:
+        np.save(f, x_true)
 
     # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
-    if i in plot_ys and j == n_repeats-1:
-        fig, ax = pairplot([x_true], limits=[[-1, 1], [-1, 1], [-1, 1]])
-        fig.suptitle('MCMC' % (n_samples_x))
-        fname = os.path.join(out_dir, 'posterior-mcmc-%d.png' % i)
+    if i in plot_y and j == n_repeats-1:
+        fig, ax = pairplot([x_true])
+        fig.suptitle('MCMC')
+        fname = os.path.join(out_dir, 'posterior-mcmc-nolimits%d.png' % i)
         plt.savefig(fname)
         plt.close()
 
 if __name__ == '__main__':
+
     x_test, y_test = get_dataset(forward_model, a, b, size=n_samples_y)
-    out_dir = os.path.join(src_dir, 'gt_samples')
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
+    src_dir = os.path.join(src_dir, 'gt_samples')
 
     prog_bar = tqdm(total=n_samples_y)
     for i, y in enumerate(y_test):
         inflated_ys = y[None, :].repeat(n_samples_x, 1)
         mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
-        Parallel(n_jobs=n_repeats)(delayed(get_gt_samples)(i,j) for j in range(n_repeats))
+        Parallel(n_jobs=10)(delayed(get_gt_samples)(i,j) for j in range(n_repeats))
         prog_bar.update()
+
 
 

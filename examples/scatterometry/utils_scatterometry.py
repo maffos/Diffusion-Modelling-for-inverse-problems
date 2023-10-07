@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import os
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -18,11 +19,18 @@ def get_dataset(forward_model,a,b,size=100):
     rand_gen = torch.manual_seed(random_state)
     xdim=3
 
-    xs = torch.rand(size, xdim, generator=rand_gen, device=device) * 2 - 1
+    xs = torch.rand(size, xdim, generator= rand_gen).to(device) * 2 - 1
     ys = forward_model(xs)
-    ys = ys + b * torch.randn_like(ys) + ys * a * torch.randn_like(ys)
+    ys = ys + b * torch.randn(ys.shape, generator = rand_gen).to(device) + ys * a * torch.randn(ys.shape, generator = torch.manual_seed(random_state+1)).to(device)
 
     return xs, ys
+
+def get_gt_samples(src_dir, y, i):
+    filename = os.path.join(src_dir,str(y),'%d.npy'%i)
+    with open(filename, 'rb') as f:
+        x_true = np.load(f)
+
+    return x_true
 
 # returns (negative) log_posterior evaluation for the scatterometry model
 # likelihood is determined by the error model

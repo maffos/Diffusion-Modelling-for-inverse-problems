@@ -1,3 +1,9 @@
+import matplotlib.pyplot as plt
+from sbi.analysis import pairplot
+from examples.scatterometry.utils_scatterometry import *
+from models.SNF import anneal_to_energy, energy_grad
+from models.diffusion import *
+import pandas as pd
 from torch.optim import Adam
 import torch
 from torch import nn
@@ -13,7 +19,7 @@ from FrEIA.framework import InputNode, OutputNode, Node, ReversibleGraphNet, Con
 from FrEIA.modules import GLOWCouplingBlock
 from sklearn.model_selection import train_test_split
 import utils
-import loss as ls
+import losses
 
 
 def create_INN(num_layers, sub_net_size,dimension,dimension_condition):
@@ -54,7 +60,7 @@ def train_inn_epoch(optimizer, model, epoch_data_loader, backward_training = Tru
             x, log_det_J = model(z_samples, c=y_noise)
             loss = utils.ForwardBackwardKLLoss(x,z,jac_inv, log_det_J, y_true, y_noise, **loss_params)
         else:
-            loss = ls.mleLoss(z,-jac_inv, **loss_params)
+            loss = losses.mleLoss(z,-jac_inv, **loss_params)
         #loss_kl = -torch.mean(jac) + torch.sum((y - MLP(x)) ** 2) / (cur_batch_size * 2 * sigma ** 2)
         #loss_kl = -torch.mean(jac) + torch.sum((y_noise - y_true) ** 2) / (cur_batch_size * 2 * sigma ** 2) #anmerkung: vorzeichen unklar. eventuell plus und minus vertauschen
         #loss_relu = 100 * torch.sum(relu(x - 1) + relu(-x))
@@ -136,6 +142,97 @@ def get_epoch_dataloader_noise(x_train, y_train):
 
     return epoch_data_loader
 
+def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_path, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
+    n_samples_y = ys.shape[0]
+    model.eval()
+    nll_diffusion = []
+    nll_mcmc = []
+    kl2_sum = 0.
+    kl2_vals = []
+    mse_score_vals = []
+    nbins = 75
+    # randomly select some y's to plot the posterior (otherwise we would get ~2000 plots)
+    plot_y = [0,5,6,20,23,42,50,77,81,93]
+    prog_bar = tqdm(total=n_samples_y)
+    for i, y in enumerate(ys):
+        # testing
+        hist_mcmc_sum = np.zeros((nbins, nbins, nbins))
+        hist_diffusion_sum = np.zeros((nbins, nbins, nbins))
+        nll_sum_mcmc = 0
+        nll_sum_diffusion = 0
+        mse_score_sum = 0
+        inflated_ys = y[None, :].repeat(n_samples_x, 1)
+        mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
+
+        for j in range(n_repeats):
+            x_pred = get_grid(model, y, xdim, ydim, num_samples=n_samples_x)
+            x_true = get_gt_samples(gt_path, i,j)
+            x_true_tensor = torch.from_numpy(x_true).to(device)
+            # calculate MSE of score on test set
+            t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
+            g_0 = model.base_sde.g(t0, x_true_tensor)
+            score_predict = model.a(x_true_tensor, t0.to(device), inflated_ys.to(device)) / g_0
+            score_true = score_posterior(x_true_tensor,inflated_ys)
+            #score_true = -energy_grad(x_true_tensor,mcmc_energy)
+            mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
+            # generate histograms
+            hist_mcmc, _ = np.histogramdd(x_true, bins=(nbins, nbins, nbins),
+                                          range=((-1, 1), (-1, 1), (-1, 1)))
+            hist_diffusion, _ = np.histogramdd(x_pred, bins=(nbins, nbins, nbins),
+                                               range=((-1, 1), (-1, 1), (-1, 1)))
+
+            hist_mcmc_sum += hist_mcmc
+            hist_diffusion_sum += hist_diffusion
+
+            # calculate negaitve log likelihood of the samples
+            nll_sum_mcmc += mcmc_energy(x_true_tensor).sum() / n_samples_x
+            nll_sum_diffusion += mcmc_energy(torch.from_numpy(x_pred).to(device)).sum() / n_samples_x
+
+        # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
+        if i in plot_y:
+            fig, ax = pairplot([x_true])
+            fig.suptitle('MCMC')
+            fname = os.path.join(out_dir, 'posterior-mcmc-nolimits%d.png' % i)
+            plt.savefig(fname)
+            plt.close()
+
+            fig, ax = pairplot([x_pred], limits = [[-1,1],[-1,1],[-1,1]])
+            fig.suptitle('PINN-Loss')
+            fname = os.path.join(out_dir, 'posterior-diffusion-limits%d.png' % i)
+            plt.savefig(fname)
+            plt.close()
+            fig, ax = pairplot([x_pred])
+            fig.suptitle('PINN-Loss' % (n_samples_x))
+            fname = os.path.join(out_dir, 'posterior-diffusion-nolimits%d.png' % i)
+            plt.savefig(fname)
+            plt.close()
+
+        hist_mcmc = hist_mcmc_sum / hist_mcmc_sum.sum()
+        hist_diffusion = hist_diffusion_sum / hist_diffusion_sum.sum()
+        hist_mcmc += epsilon
+        hist_diffusion += epsilon
+        hist_mcmc /= hist_mcmc.sum()
+        hist_diffusion /= hist_diffusion.sum()
+
+        kl2 = np.sum(scipy.special.rel_entr(hist_mcmc, hist_diffusion))
+        kl2_sum += kl2
+        kl2_vals.append(kl2)
+        nll_mcmc.append(nll_sum_mcmc.item() / n_repeats)
+        nll_diffusion.append(nll_sum_diffusion.item() / n_repeats)
+        mse_score_vals.append(mse_score_sum.item()/n_repeats)
+        prog_bar.set_description(
+            'KL_diffusion: {:.3f}'.format(np.mean(kl2_vals)))
+        prog_bar.update()
+
+    prog_bar.close()
+    kl2_vals = np.array(kl2_vals)
+    kl2_var = np.sum((kl2_vals - kl2_sum / n_samples_y) ** 2) / n_samples_y
+    nll_mcmc = np.array(nll_mcmc)
+    nll_diffusion = np.array(nll_diffusion)
+    df = pd.DataFrame(
+        {'KL2': kl2_vals, 'NLL_mcmc': nll_mcmc,'NLL_diffusion': nll_diffusion,'MSE':np.array(mse_score_vals)})
+    df.to_csv(os.path.join(out_dir, 'results.csv'))
+    print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
 def load_data(filename):
 
     data = np.load(filename, allow_pickle=True)["data"].item()
@@ -155,121 +252,39 @@ def load_data(filename):
 # a set of testing_ys and the forward model (forward_map)
 
 if __name__ == '__main__':
-    num_epochs = 6400
-    DIMENSION = 6
-    COND_DIM = 468
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    sigma = 0.01
-    conv_lambda = 0.05
-    output_dir = 'plots/lamb=%.2f/sigma=%.2f'%(conv_lambda,sigma)
-    if not os.path.isdir(output_dir):
-        os.makedirs(output_dir)
+    forward_model = nn.Sequential(nn.Linear(3, 256), nn.ReLU(),
+                                  nn.Linear(256, 256), nn.ReLU(),
+                                  nn.Linear(256, 256), nn.ReLU(),
+                                  nn.Linear(256, 23)).to(device)
+    src_dir = 'examples/scatterometry'
+    gt_dir = os.path.join(src_dir, 'gt_samples')
+    forward_model.load_state_dict(
+        torch.load(os.path.join(src_dir, 'surrogate.pt'), map_location=torch.device(device)))
+    for param in forward_model.parameters():
+        param.requires_grad = False
 
-    #the distribution of the latent space is defined. Usually this is a standard normal. This is not necessarily the same as the prior, which in most of our simulations is uniform.
-    latent_prior = MultivariateNormal(torch.zeros(DIMENSION), torch.eye(DIMENSION))
-    INN = create_INN(8,128,dimension=DIMENSION,dimension_condition=COND_DIM)
+    a = 0.2
+    b = 0.01
+    lambd_bd = 1000
+    xdim = 3
+    ydim = 23
 
-    
-    MLP = nn.Sequential(nn.Linear(DIMENSION, 256),
-                          nn.ReLU(),
-                          nn.Linear(256, 256),
-                          nn.ReLU(),
-                        nn.Linear(256, 256),
-                        nn.ReLU(),
-                        nn.Linear(256, 256),
-                        nn.ReLU(),
-                          nn.Linear(256, COND_DIM))
-    
-    optimizer_inn = Adam(INN.parameters(), lr = 1e-4)
-    optimizer_mlp = Adam(MLP.parameters(),lr = 1e-4)
+    n_samples_y = 100
+    n_samples_x = 30000
+    n_epochs = 20000
+    x_test, y_test = get_dataset(forward_model, a, b, size=n_samples_y)
 
-    prog_bar = tqdm(total=num_epochs)
-    
-    filename = 'data/uniform_age_25/npz/AbdAorta_PPG.npz'
-    #age = '25'
-    xs,ys,x_labels = load_data(filename)
+    score_posterior = lambda x, y: -energy_grad(x, lambda x: get_log_posterior(x, forward_model, a, b, y, lambd_bd))[0]
+    score_prior = lambda x: -x
 
-    X_train, X_test, y_train, y_test = train_test_split(xs,ys, train_size=.8)
-    #choose an arbitrary y to evaluate the posterior
-    y_ex = y_test[-1].clone()
-    y_ex = y_ex + torch.randn_like(y_ex) * sigma
-    y_ex = y_ex.repeat(1000, 1)
-
-    MLP_error = []
-    epochs = []
-    test_loader = get_epoch_dataloader(X_test, y_test)
-
-    
-    #train MLP surrogate
-    for i in range(num_epochs):
-        data_loader = get_epoch_dataloader(X_train,y_train)
-
-        #print the absolute error every 200 epochs
-        if i%800 == 0:
-            MLP.eval()
-            err = []
-            for k, (x, y) in enumerate(test_loader()):
-                diff = torch.abs(y - MLP(x))
-                # print(diff.shape)
-                err.append(diff.detach().data.numpy())
-
-            err = np.concatenate(err, axis=0)
-            print('--------------')
-            print('Num Epochs = ', i)
-            print('Mean absolute approximation error of the forward problem:', np.mean(err))
-            MLP_error.append(np.mean(err))
-            epochs.append(i)
-
-        loss = train_MLP_epoch(optimizer_mlp, MLP, data_loader)
-        prog_bar.set_description('loss: {:.4f}'.format(loss))
-        prog_bar.update()
-    prog_bar.close()
-
-    #last evaluation after training is done
-    MLP.eval()
-    err = []
-    for k, (x, y) in enumerate(test_loader()):
-        diff = torch.abs(y - MLP(x))
-        # print(diff.shape)
-        err.append(diff.detach().data.numpy())
-
-    err = np.concatenate(err, axis=0)
-    print('--------------')
-    print('Num Epochs = ', num_epochs)
-    print('Mean absolute approximation error of the forward problem:', np.mean(err))
-    MLP_error.append(np.mean(err))
-    epochs.append(num_epochs)
-
-    #plot the mean absolute error against number of epochs
-    fig = plt.figure()
-    plt.plot(epochs, MLP_error)
-    plt.xlabel('Epoch')
-    plt.ylabel('Error')
-    plt.title('Mean absolute Error of the forward problem')
-    plt.savefig(os.path.join(output_dir, 'mean_error.png'))
-    
-
-    #train INN
-    prog_bar = tqdm(total=num_epochs)
-
-    for i in range(num_epochs):
-        data_loader = get_epoch_dataloader_noise(X_train,y_train)
-
-        #evaluate the posterior every 200 Epochs
-        if i%200 == 0:
-            INN.eval()
-            samples = INN(torch.randn(1000, DIMENSION, device=device), c=y_ex)[0]
-
-            make_image(samples.detach().data.numpy(), X_test[-1].detach().data.numpy().reshape(1, DIMENSION), i)
-
-        loss = train_inn_epoch(optimizer_inn, INN, data_loader, backward_training = False, latent_prior = latent_prior)
-        prog_bar.set_description('loss: {:.4f}'.format(loss))
-        prog_bar.update()
-
-    #last evaluation after training is finished
-    INN.eval()
-    samples = INN(torch.randn(1000, DIMENSION, device=device), c=y_ex)[0]
-    make_image(samples.detach().data.numpy(), X_test[-1].detach().data.numpy().reshape(1, DIMENSION), num_epochs)
-
-    prog_bar.close()
+    subfolder_path = os.path.join(src_dir, 'results/CFM/PINNLoss4/3layer/L2/L1/lam:0.1/lam2:0.01')
+    chkpnt_path = os.path.join(subfolder_path, 'diffusion.pt')
+    if os.path.isfile(chkpnt_path):
+        out_dir = os.path.join(src_dir, 'test')
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+        model = create_diffusion_model2(xdim, ydim, hidden_layers=[512, 512, 512])
+        checkpoint = torch.load(chkpnt_path, map_location=torch.device(device))
+        model.a.load_state_dict(checkpoint)
+        evaluate(model, y_test, forward_model, a, b, lambd_bd, out_dir, gt_dir, n_samples_x=n_samples_x)
 
