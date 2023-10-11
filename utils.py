@@ -178,7 +178,7 @@ def div_estimator(s,x,num_samples=1, rademacher = True):
     div /= num_samples
     return div
 
-def plot_density(samples, nbins, title, show = False, cmap = 'viridis', limits=None, fname = None):
+def plot_density(samples, nbins, show = False, cmap = 'viridis', limits=None, fname = None):
     """
     Plot the density of the samples in a grid.
     Parameters:
@@ -196,18 +196,19 @@ def plot_density(samples, nbins, title, show = False, cmap = 'viridis', limits=N
                 else:
                     bins = np.linspace(np.min(samples[:, i]), np.max(samples[:, i]), nbins)
 
-                sns.histplot(samples[:, i], ax=axes[i, j], kde=True, element = 'step', bins=bins, color='blue')
+                sns.histplot(samples[:, i], ax=axes[i, j], kde=False, element = 'step', bins=bins, fill=False)
                 axes[i, j].set_xlim(bins[0], bins[-1])
                 axes[i,j].set_ylabel('')
                 # Removing y axis labels for diagonal plots
                 axes[i, j].set_yticklabels([])
+                sns.despine(left=True,top=True,right=True)
             elif i < j:
                 # 2D histogram off-diagonal
                 if limits:
                     hist_range = [limits, limits]
                 else:
-                    hist_range = [(np.min(samples[:, i]), np.max(samples[:, i])),
-                                  (np.min(samples[:, j]), np.max(samples[:, j]))]
+                    hist_range = [(np.min(samples[:, j]), np.max(samples[:, j])),
+                                  (np.min(samples[:, i]), np.max(samples[:, i]))]
 
                 H, xedges, yedges = np.histogram2d(samples[:, j], samples[:, i], bins=nbins, range=hist_range)
                 axes[i, j].imshow(H.T, origin='lower', aspect='auto', interpolation='nearest',
@@ -215,15 +216,16 @@ def plot_density(samples, nbins, title, show = False, cmap = 'viridis', limits=N
                                   cmap=cmap)
                 axes[i, j].set_xlim(hist_range[0])
                 axes[i, j].set_ylim(hist_range[1])
+                sns.despine(right=True, top=True, bottom=True)
                 # For non-diagonal plots, share x and y
                 if j > i+1:
                     axes[i, j].set_yticklabels([])
+                    sns.despine(left=True,right=True, top=True, bottom=True)
 
                 axes[i, j].set_xticklabels([])
             else:
                 # For the lower triangular plots, we make them blank
                 axes[i, j].axis('off')
-    fig.suptitle(title, fontsize = 30)
     plt.tight_layout()
     if fname:
         plt.savefig(fname)

@@ -1,5 +1,7 @@
 import matplotlib.pyplot as plt
 from sbi.analysis import pairplot
+
+import utils
 from models.diffusion import *
 from models.SNF import anneal_to_energy, energy_grad
 from utils_scatterometry import *
@@ -19,39 +21,6 @@ NOISE_STD_MCMC = 0.5
 METR_STEPS = 1000
 RANDOM_STATE = 13
 
-def train_epoch(optimizer, loss_fn, model, epoch_data_loader, t_min):
-    mean_loss = 0
-    logger_info = {}
-
-    for k, (x, y) in enumerate(epoch_data_loader()):
-
-        t = sample_t(model,x)
-        loss = loss_fn(model,x,t,y)
-        if isinstance(loss, tuple):
-            loss_info = loss[1]
-            loss = loss[0]
-            for key,value in loss_info.items():
-                try:
-                    logger_info[key] = logger_info[key] * k / (k + 1) + value.item() / (k + 1)
-                except:
-                    logger_info[key] = 0
-                    logger_info[key] = logger_info[key] * k / (k + 1) + value.item() / (k + 1)
-
-        if torch.min(t) < t_min:
-            t_min = torch.min(t)
-        if torch.isnan(loss):
-            for key, value in loss_info.items():
-                print(key + ':' + str(value))
-            raise ValueError(
-                'Loss is nan, min sampled t was %f. Minimal t during training was %f' % (torch.min(t), t_min))
-        #loss = model.dsm(x,y).mean()
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        mean_loss = mean_loss * k / (k + 1) + loss.data.item() / (k + 1)
-    return mean_loss, logger_info, t_min
-
 def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, batch_size, save_dir, log_dir):
 
     logger = SummaryWriter(log_dir)
@@ -60,7 +29,7 @@ def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, ba
     prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
         data_loader = get_epoch_data_loader(batch_size, forward_model, a, b, lambd_bd)
-        loss,logger_info, t_min = train_epoch(optimizer, loss_fn, model, data_loader, t_min)
+        loss,logger_info, t_min = train_diffusion_epoch(optimizer, loss_fn, model, data_loader, t_min)
         prog_bar.set_description('diffusion loss:{:.3f}'.format(loss))
         logger.add_scalar('Train/Loss', loss, i)
         for key,value in logger_info.items():
@@ -76,15 +45,15 @@ def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, ba
 
     return model
 
-def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
+def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10,xlim = (-1.2,1.2),nbins = 75):
     n_samples_y = ys.shape[0]
     model.eval()
     nll_diffusion = []
     nll_mcmc = []
     kl2_sum = 0.
     kl2_vals = []
+    kl2_reverse_vals = []
     mse_score_vals = []
-    nbins = 75
     # randomly select some y's to plot the posterior (otherwise we would get ~2000 plots)
     plot_y = [0,5,6,20,23,42,50,77,81,93]
     prog_bar = tqdm(total=n_samples_y)
@@ -98,9 +67,9 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
         inflated_ys = y[None, :].repeat(n_samples_x, 1)
         mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
 
-        for _ in range(n_repeats):
+        for j in range(n_repeats):
             x_pred = get_grid(model, y, xdim, ydim, num_samples=n_samples_x)
-            x_true = anneal_to_energy(torch.rand(n_samples_x, xdim, device=device) * 2 - 1, mcmc_energy, METR_STEPS,noise_std=NOISE_STD_MCMC)[0].detach().cpu().numpy()
+            x_true = get_gt_samples(gt_dir,i,j)
             x_true_tensor = torch.from_numpy(x_true).to(device)
             # calculate MSE of score on test set
             t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
@@ -111,9 +80,9 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
             mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
             # generate histograms
             hist_mcmc, _ = np.histogramdd(x_true, bins=(nbins, nbins, nbins),
-                                          range=((-1, 1), (-1, 1), (-1, 1)))
+                                          range=(xlim, xlim, xlim))
             hist_diffusion, _ = np.histogramdd(x_pred, bins=(nbins, nbins, nbins),
-                                               range=((-1, 1), (-1, 1), (-1, 1)))
+                                               range=(xlim, xlim, xlim))
 
             hist_mcmc_sum += hist_mcmc
             hist_diffusion_sum += hist_diffusion
@@ -124,22 +93,31 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
 
         # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
         if i in plot_y:
-            fig, ax = pairplot([x_true], limits = [[-1,1],[-1,1],[-1,1]])
-            fig.suptitle('MCMC' % (n_samples_x))
+
+            fig, ax = pairplot([x_true], limits = [xlim,xlim,xlim])
             fname = os.path.join(out_dir, 'posterior-mcmc-%d.png' % i)
             plt.savefig(fname)
             plt.close()
+            utils.plot_density(x_true, nbins, limits = xlim,fname=os.path.join(out_dir, 'posterior-mcmc_own-%d'%i))
 
-            fig, ax = pairplot([x_pred], limits = [[-1,1],[-1,1],[-1,1]])
-            fig.suptitle('PINN-Loss' % (n_samples_x))
+            fig, ax = pairplot([x_true])
+            fname = os.path.join(out_dir, 'posterior-mcmc_no-limits-%d.png' % i)
+            plt.savefig(fname)
+            plt.close()
+            utils.plot_density(x_true, nbins,fname=os.path.join(out_dir, 'posterior-mcmc_no-limits_own-%d'%i))
+
+            fig, ax = pairplot([x_pred], limits = [xlim,xlim,xlim])
             fname = os.path.join(out_dir, 'posterior-diffusion-limits%d.png' % i)
             plt.savefig(fname)
             plt.close()
+            utils.plot_density(x_pred, nbins, limits = xlim,fname=os.path.join(out_dir, 'posterior-diffusion_own-%d'%i))
+
             fig, ax = pairplot([x_pred])
-            fig.suptitle('PINN-Loss' % (n_samples_x))
             fname = os.path.join(out_dir, 'posterior-diffusion-nolimits%d.png' % i)
             plt.savefig(fname)
             plt.close()
+            utils.plot_density(x_true, nbins,fname=os.path.join(out_dir, 'posterior-diffusion_no_limits_own-%d'%i))
+
 
         hist_mcmc = hist_mcmc_sum / hist_mcmc_sum.sum()
         hist_diffusion = hist_diffusion_sum / hist_diffusion_sum.sum()
@@ -149,8 +127,10 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
         hist_diffusion /= hist_diffusion.sum()
 
         kl2 = np.sum(scipy.special.rel_entr(hist_mcmc, hist_diffusion))
+        kl2_reverse = np.sum(scipy.special.rel_entr(hist_diffusion,hist_mcmc))
         kl2_sum += kl2
         kl2_vals.append(kl2)
+        kl2_reverse_vals.append(kl2_reverse)
         nll_mcmc.append(nll_sum_mcmc.item() / n_repeats)
         nll_diffusion.append(nll_sum_diffusion.item() / n_repeats)
         mse_score_vals.append(mse_score_sum.item()/n_repeats)
@@ -164,7 +144,7 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
     nll_mcmc = np.array(nll_mcmc)
     nll_diffusion = np.array(nll_diffusion)
     df = pd.DataFrame(
-        {'KL2': kl2_vals, 'NLL_mcmc': nll_mcmc,'NLL_diffusion': nll_diffusion,'MSE':np.array(mse_score_vals)})
+        {'KL2': kl2_vals, 'KL_reverse':kl2_reverse_vals, 'NLL_mcmc': nll_mcmc,'NLL_diffusion': nll_diffusion,'MSE':np.array(mse_score_vals)})
     df.to_csv(os.path.join(out_dir, 'results.csv'))
     print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
         
@@ -197,10 +177,9 @@ if __name__ == '__main__':
     hidden_layers = [512,512,512]
     model = create_diffusion_model2(xdim,ydim,hidden_layers)
     optimizer = Adam(model.a.parameters(), lr=1e-4)
-    loss_fn = PINNLoss4(initial_condition = score_posterior, lam=.00001,lam2=.1, pde_loss='CFM', ic_metric = 'L1')
-    #loss_fn = ErmonLoss(lam=.1)
+    loss_fn = PINNLoss4()
+    train_dir = ''
 
-    train_dir = os.path.join(src_dir,'test','CFM', loss_fn.name, 'L2', 'L1', 'lam:1.', 'lam2:0.1')
     log_dir = os.path.join(train_dir, 'logs')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)

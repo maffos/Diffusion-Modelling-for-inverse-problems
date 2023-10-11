@@ -4,7 +4,6 @@ import os
 
 def get_params_from_path_ermonloss(path):
     params = {}
-    print(path)
     if 'lr:0.0001' in path:
         params['metric'] = path[-4]
         params['lam'] = path[-3]
@@ -14,20 +13,22 @@ def get_params_from_path_ermonloss(path):
     return params
 
 def get_params_from_path(path):
-    # params['Loss'] = path[4]
-    # params['num_layers'] = path[5]
     params = {}
     params['metric'] = path[6]
     params['ic-metric'] = path[7]
     params['lam'] = path[8]
     # params['lr'] = path[-1]
+
     if 'lam2' in path[-1]:
         params['lam2'] = path[-1]
     elif 'lam2' in path[-2]:
         params['lam2'] = path[-2]
+    elif 'lam2' in path[-3]:
+        params['lam2'] = path[-3]
 
     return params
-def traverse_subfolders(source_dir, exclude = []):
+
+def traverse_subfolders(source_dir, exclude = [], linear = False):
     best_params_kl = {}
     best_params_nll = {}
     best_params_mse = {}
@@ -37,9 +38,8 @@ def traverse_subfolders(source_dir, exclude = []):
     for root, dirs, files in os.walk(source_dir):
         for dir_name in dirs:
             subfolder_path = os.path.join(root, dir_name)
-            #results_dir = os.path.join(subfolder_path, "results")
             if all(x not in subfolder_path for x in exclude):
-                if 'results' in subfolder_path:
+                if ('results2' in subfolder_path and linear) or ('results' in subfolder_path and not linear):
                     results_csv = os.path.join(subfolder_path, "results.csv")
                     if os.path.isfile(results_csv):
                         df = pd.read_csv(results_csv)
@@ -47,7 +47,11 @@ def traverse_subfolders(source_dir, exclude = []):
                             kl = df['KL2'].mean()
                         except:
                             kl = df['KL'].mean()
-                        nll_diff = np.mean(np.abs(df['NLL_mcmc']-df['NLL_diffusion']))
+
+                        if linear:
+                            nll_diff = np.mean(np.abs(df['NLL_true']-df['NLL_diffusion']))
+                        else:
+                            nll_diff = np.mean(np.abs(df['NLL_mcmc']-df['NLL_diffusion']))
                         try:
                             mse = df['MSE'].mean()
                         except:
@@ -96,10 +100,11 @@ def compare_2_methods(path_method_1, path_method_2):
     print('Method2: ', score2)
     return best_params, best_score
 # Usage
-source_directory = 'examples/scatterometry/results/FPE/PINNLoss4/3layer/L1/L1/lam:0.001/lam2:0.0001'
+source_directory = 'examples/scatterometry/results/CFM/ErmonLoss/3layer/'
 if not os.path.exists(source_directory):
     raise ValueError('Source directory doesnt exist')
-params_kl,params_nll,params_mse,kl,nll,mse = traverse_subfolders(source_directory)
+exclude = []
+params_kl,params_nll,params_mse,kl,nll,mse = traverse_subfolders(source_directory, exclude,linear = False)
 #path1 = 'examples/scatterometry/dsm-loss'
 #path2 = 'examples/scatterometry/scatterometry_runs_new/CFM/ErmonLoss/4layer/L2/lam:0.1/lr:0.0001/results'
 #params,score = compare_2_methods(path1,path2)

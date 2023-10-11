@@ -33,13 +33,6 @@ Sigma_inv = 1 / scale * torch.eye(ydim)
 Sigma_y_inv = torch.linalg.inv(Sigma + A @ Lam @ A.T + epsilon * torch.eye(ydim))
 mu = torch.zeros(xdim)
 
-def generate_dataset(n_samples, random_state = 7):
-
-    random_gen = torch.random.manual_seed(random_state)
-    x = torch.randn(n_samples,xdim, generator = random_gen)
-    y = f(x)
-    return x.to(device),y.to(device)
-
 def get_dataloader_dsm(scale,batch_size, nx,ny,nt):
 
     eps = 1e-6
@@ -110,13 +103,20 @@ def check_diffusion(model, n_samples, num_plots):
         plt.close()
         print('KL Divergence = %.4f'%kl_div)
 
+def generate_dataset(n_samples, random_state = 7):
+
+    random_gen = torch.random.manual_seed(random_state)
+    x = torch.randn(n_samples,xdim, generator = random_gen).to(device)
+    y = f(x)
+    return x,y
+
 #affine function as forward problem
 def f(x):
     return (A@x.T).T+b
 
 def get_likelihood(x):
 
-    mean = A@x+b
+    mean = A.to(x)@x+b.to(x)
     return MultivariateNormal(mean,Sigma)
 
 def get_evidence():
@@ -125,18 +125,18 @@ def get_evidence():
 
     return MultivariateNormal(mean,cov)
 
-def get_posterior(y):
+def get_posterior(y, device = device):
     y_res = y-(A@mu+b)
     mean = Lam@A.T@Sigma_y_inv@y_res
     cov = Lam-Lam@A.T@Sigma_y_inv@A@Lam
 
-    return MultivariateNormal(mean,cov)
+    return MultivariateNormal(mean.to(device),cov.to(device))
 
 #analytical score of the posterior
 def score_posterior(x,y):
     y_res = y-(x@A.T+b)
     score_prior = -x
-    score_likelihood = y_res@Sigma_inv@A.T
+    score_likelihood = (y_res@Sigma_inv.T)@A
     return score_prior+score_likelihood
 
 def log_plot(dist):
@@ -181,7 +181,14 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
                 if torch.min(t) < t_min:
                     t_min = torch.min(t)
                     min_epoch = i
-            loss,loss_info = loss_fn(model,x,t,y)
+
+            if loss_fn.name == 'DSMLoss':
+                x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
+                s = model.a(x_t, t, y) / g
+                loss = loss_fn(s,std,target).mean()
+                loss_info = {'Train/DSM-Loss': loss}
+            else:
+                loss,loss_info = loss_fn(model,x,t,y)
             mean_loss += loss.data.item()
 
             for key,value in loss_info.items():
@@ -189,7 +196,7 @@ def train(model,xs,ys, optim, loss_fn, save_dir, log_dir, num_epochs, batch_size
                     logger_info[key] +=value.item()
                 except:
                     logger_info[key] = value.item()
-        
+
             if debug:
                 if torch.isnan(loss):
                     for key,value in loss_info.items():
@@ -270,9 +277,9 @@ def evaluate(model,ys, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
 
                 # generate histograms
                 hist_true, _ = np.histogramdd(x_true, bins=(nbins, nbins),
-                                              range=((-4, 4), (-4, 4)))
+                                              range=((-2, 2), (-2, 2)))
                 hist_diffusion, _ = np.histogramdd(x_pred, bins=(nbins, nbins),
-                                                   range=((-4, 4), (-4, 4)))
+                                                   range=((-2, 2), (-2, 2)))
 
                 hist_true_sum += hist_true
                 hist_diffusion_sum += hist_diffusion
@@ -283,13 +290,13 @@ def evaluate(model,ys, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
 
             # only plot samples of the last repeat otherwise it gets too much and plot only for some fixed y
             if i in plot_ys:
-                fig, ax = conditional_pairplot(posterior, condition=y, limits=[[-4, 4], [-4, 4]])
+                fig, ax = conditional_pairplot(posterior, condition=y, limits=[[-2, 2], [-2, 2]])
                 fig.suptitle('Posterior at y=(%.2f,%.2f)' % (y[0], y[1]))
                 fname = os.path.join(out_dir, 'posterior-true%d.png' % i)
                 plt.savefig(fname)
                 plt.close()
 
-                fig, ax = pairplot([x_pred], limits = [[-4,4],[-4,4]])
+                fig, ax = pairplot([x_pred], limits = [[-2,2],[-2,2]])
                 fig.suptitle('PINN-Loss')
                 fname = os.path.join(out_dir, 'posterior-pinn-%d.png' % i)
                 plt.savefig(fname)
@@ -330,7 +337,7 @@ if __name__ == '__main__':
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.9, random_state = 7)
 
     #define parameters
-    src_dir = 'ScoreFPE/3layer/L1-pde/L2-IC'
+    src_dir = 'results/baselines'
     hidden_layers = [512,512,512]
     resume_training = False
     pde_loss = 'FPE'
@@ -342,13 +349,14 @@ if __name__ == '__main__':
     #define models
     model = create_diffusion_model2(xdim,ydim, hidden_layers=hidden_layers)
     #loss_fn =PINNLoss2(initial_condition=score_posterior, boundary_condition=lambda x: -x, pde_loss=pde_loss, lam=lam)
-    loss_fn = PINNLoss4(initial_condition=score_posterior, lam=lam,lam2=lam2, pde_loss = pde_loss, metric = metric)
+    #loss_fn = PINNLoss4(initial_condition=score_posterior, lam=lam,lam2=lam2, pde_loss = pde_loss, metric = metric)
+    loss_fn = DSMLoss()
     #loss_fn = ScoreFlowMatchingLoss(lam=.1)
     #loss_fn = PINNLoss3(initial_condition = score_posterior, lam = .1, lam2 = 1)
     #loss_fn = ErmonLoss(lam=0.1, pde_loss = 'FPE')
     optimizer = Adam(model.a.parameters(), lr = lr)
 
-    train_dir = os.path.join(src_dir,loss_fn.name, 'lam:{}'.format(lam), 'lam2:{}'.format(lam2))
+    train_dir = os.path.join(src_dir,loss_fn.name)
     if resume_training:
         model.a.load_state_dict(torch.load(os.path.join(train_dir,'current_model.pt'),map_location=torch.device(device)))
         out_dir = os.path.join(train_dir, 'results_resume')
@@ -372,8 +380,6 @@ if __name__ == '__main__':
     model = train(model,x_train,y_train, optimizer, loss_fn, train_dir, log_dir, num_epochs=5000, resume_training = resume_training)
     #we need to wrap the reverse SDE into an own class to use the integration method from torchsde
     #reverse_process = SDE(reverse_process.a, reverse_process.base_sde, xdim, ydim, sde_type='stratonovich')
-    kl_div, nll, nll_diffusion, mse = evaluate(model, y_test[:100], out_dir, n_samples_x = 30000, n_repeats = 5)
-
-    print('KL: %.3f, NLL: %.3f, NLL-diffusion: %.3f, MSE: %.7f'%(kl_div,nll,nll_diffusion,mse))
+    evaluate(model, y_test[:100], out_dir, n_samples_x = 30000, n_repeats = 10)
     #model = create_diffusion_model2(xdim,ydim, hidden_layers=[512,512])
     #check_diffusion(model, n_samples=20000,num_plots=3)

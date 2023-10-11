@@ -335,13 +335,13 @@ if __name__ == '__main__':
     best_score = torch.inf
     #best_params={}
     best_loss = None
-    params = {'loss_fn': ['PINNLoss4'],
+    params = {'loss_fn': ['ErmonLoss'],
     'lr': [1e-4],
-    'lam': [.1,.001],
-    'lam2':[.01,10.],
+    'lam': [.001, .1,1.],
+    #'lam2':[.001,.0001],
     'pde_loss': ['FPE'],
-    'metric': ['L1'],
-    'ic_metric':['L2'],
+    'metric': ['L2'],
+    #'ic_metric':['L1','L2'],
     'hidden_layers':['3layer']}
     src_dir = 'new_folder_structure'
     resume_training = False

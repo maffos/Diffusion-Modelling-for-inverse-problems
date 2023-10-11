@@ -1,7 +1,8 @@
+import shutil
 
 import matplotlib.pyplot as plt
 from sbi.analysis import pairplot, conditional_pairplot
-
+from utils import plot_density
 from models.SNF import *
 from models.diffusion import *
 from models.INN import *
@@ -21,14 +22,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 NOISE_STD_MCMC = 0.5
 METR_STEPS = 1000
 RANDOM_STATE = 13
-lambd_bd = 1000
-num_epochs_INN = 5000
-
-
-
-    
-#is added to KL Divergence to improve numerical stability
-reg = 1e-10
 
 def train(forward_model, num_epochs_SNF, num_epochs_diffusion, num_epochs_INN,batch_size, lambd_bd, save_dir,log_dir):
     # define networks
@@ -52,9 +45,10 @@ def train(forward_model, num_epochs_SNF, num_epochs_diffusion, num_epochs_INN,ba
 
     optimizer_diffusion = Adam(diffusion_model.parameters(), lr = 1e-4)
     prog_bar = tqdm(total=num_epochs_diffusion)
+    t_min = torch.inf
     for i in range(num_epochs_diffusion):
         data_loader=get_epoch_data_loader(batch_size,forward_model,a,b,lambd_bd)
-        loss,logger_info,t = train_diffusion_epoch(optimizer_diffusion, loss_fn_diffusion, diffusion_model, data_loader)
+        loss,logger_info,t = train_diffusion_epoch(optimizer_diffusion, loss_fn_diffusion, diffusion_model, data_loader,t_min)
         logger.add_scalar('Train/diffusion-Loss', loss, i)
         prog_bar.set_description('diffusion loss:{:.3f}'.format(loss))
         prog_bar.update()
@@ -82,7 +76,7 @@ def train(forward_model, num_epochs_SNF, num_epochs_diffusion, num_epochs_INN,ba
 
     return snf, diffusion_model,INN
 
-def evaluate(snf,diffusion_model, INN, out_dir, plot_dir, n_samples_y = 200, n_samples_x=5000,n_repeats=10, n_plots = 10):
+def evaluate(snf,diffusion_model, INN, out_dir, gt_path, n_samples_y = 100, n_samples_x=5000,n_repeats=10):
 
     snf.eval()
     INN.eval()
@@ -98,9 +92,14 @@ def evaluate(snf,diffusion_model, INN, out_dir, plot_dir, n_samples_y = 200, n_s
         kl2_sum = 0.
         kl3_sum = 0.
         kl1_vals = []
+        kl1_reverse_vals = []
         kl2_vals = []
+        kl2_reverse_vals = []
         kl3_vals = []
+        kl3_reverse_vals = []
         nbins = 75
+        xlim = (-1.2,1.2)
+
         #I just hardcode some ys that I use for plotting for reproducability
         plot_y = [0,5,6,20,23,42,50,77,81,93]
         prog_bar = tqdm(total=n_samples_y)
@@ -118,20 +117,19 @@ def evaluate(snf,diffusion_model, INN, out_dir, plot_dir, n_samples_y = 200, n_s
 
             mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
             
-            for _ in range(n_repeats):
+            for j in range(n_repeats):
                 x_pred_diffusion = get_grid(diffusion_model,y,xdim,ydim, num_samples=n_samples_x)
                 x_pred_snf = snf.forward(torch.randn(n_samples_x, xdim, device=device), inflated_ys)[0].detach().cpu().numpy()
                 x_pred_inn = INN(torch.randn(n_samples_x, xdim, device=device), c = inflated_ys)[0].detach().cpu().numpy()
-                x_true = anneal_to_energy(torch.rand(n_samples_x, xdim, device=device) * 2 - 1, mcmc_energy, METR_STEPS,
-                                 noise_std=NOISE_STD_MCMC)[0].detach().cpu().numpy()
+                x_true = get_gt_samples(gt_path, i,j)
         
                 # generate histograms
                 hist_mcmc, _ = np.histogramdd(x_true, bins=(nbins, nbins, nbins),
-                                              range=((-1, 1), (-1, 1), (-1, 1)))
-                hist_snf, _ = np.histogramdd(x_pred_snf, bins=(nbins, nbins, nbins), range=((-1, 1), (-1, 1), (-1, 1)))
-                hist_diffusion, _ = np.histogramdd(x_pred_diffusion, bins=(nbins, nbins, nbins), range=((-1, 1), (-1, 1), (-1, 1)))
+                                              range=(xlim, xlim, xlim))
+                hist_snf, _ = np.histogramdd(x_pred_snf, bins=(nbins, nbins, nbins), range=(xlim, xlim, xlim))
+                hist_diffusion, _ = np.histogramdd(x_pred_diffusion, bins=(nbins, nbins, nbins), range=(xlim, xlim, xlim))
                 hist_inn, _ = np.histogramdd(x_pred_inn, bins=(nbins, nbins, nbins),
-                                                   range=((-1, 1), (-1, 1), (-1, 1)))
+                                                   range=(xlim, xlim, xlim))
                 hist_mcmc_sum += hist_mcmc
                 hist_snf_sum += hist_snf
                 hist_diffusion_sum += hist_diffusion
@@ -144,29 +142,30 @@ def evaluate(snf,diffusion_model, INN, out_dir, plot_dir, n_samples_y = 200, n_s
                 nll_sum_inn += mcmc_energy(torch.from_numpy(x_pred_inn).to(device)).sum() / n_samples_x
             if i in plot_y:
                 # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
-                fig, ax = pairplot([x_true])
-                fig.suptitle('MCMC')
-                fname = os.path.join(plot_dir, 'posterior-mcmc-%d.png' % i)
+                fig, ax = pairplot([x_true], limits = [xlim,xlim,xlim])
+                fname = os.path.join(out_dir, 'posterior-mcmc-%d.svg' % i)
                 plt.savefig(fname)
                 plt.close()
+                plot_density(x_true, nbins, limits = xlim, fname = os.path.join(out_dir, 'posterior-mcmc_own-%d.svg'%i))
 
-                fig, ax = pairplot([x_pred_snf])
-                fig.suptitle('SNF')
-                fname = os.path.join(plot_dir, 'posterior-snf-%d.png' % i)
+                fig, ax = pairplot([x_pred_snf],limits=[xlim,xlim,xlim])
+                fname = os.path.join(out_dir, 'posterior-snf-%d.svg' % i)
                 plt.savefig(fname)
                 plt.close()
+                plot_density(x_pred_snf, nbins, limits = xlim, fname = os.path.join(out_dir, 'posterior-snf_own-%d.svg'%i))
 
-                fig, ax = pairplot([x_pred_diffusion])
-                fig.suptitle('DSM-Loss')
-                fname = os.path.join(plot_dir, 'posterior-dsm-loss-%d.png' % i)
+                fig, ax = pairplot([x_pred_diffusion],limits=[xlim,xlim,xlim])
+                fname = os.path.join(out_dir, 'posterior-dsm-%d.svg' % i)
                 plt.savefig(fname)
                 plt.close()
+                plot_density(x_pred_diffusion, nbins, limits = xlim, fname = os.path.join(out_dir, 'posterior-dsm_own-%d.svg'%i))
 
-                fig, ax = pairplot([x_pred_inn])
-                fig.suptitle('GLOW')
-                fname = os.path.join(plot_dir, 'posterior-inn-%d.png' % i)
+                fig, ax = pairplot([x_pred_inn],limits=[xlim,xlim,xlim])
+                fname = os.path.join(out_dir, 'posterior-inn-%d.svg' % i)
                 plt.savefig(fname)
                 plt.close()
+                plot_density(x_pred_inn, nbins, limits = xlim, fname = os.path.join(out_dir, 'posterior-inn_own-%d.svg'%i))
+
 
             hist_mcmc = hist_mcmc_sum / hist_mcmc_sum.sum()
             hist_snf = hist_snf_sum / hist_snf_sum.sum()
@@ -182,14 +181,20 @@ def evaluate(snf,diffusion_model, INN, out_dir, plot_dir, n_samples_y = 200, n_s
             hist_inn /= hist_inn.sum()
         
             kl1 = np.sum(scipy.special.rel_entr(hist_mcmc, hist_snf))
+            kl1_reverse = np.sum(scipy.special.rel_entr(hist_snf,hist_mcmc))
             kl2 = np.sum(scipy.special.rel_entr(hist_mcmc, hist_diffusion))
+            kl2_reverse = np.sum(scipy.special.rel_entr(hist_diffusion,hist_mcmc))
             kl3 = np.sum(scipy.special.rel_entr(hist_mcmc, hist_inn))
+            kl3_reverse = np.sum(scipy.special.rel_entr(hist_inn,hist_mcmc))
             kl1_sum += kl1
             kl2_sum += kl2
             kl3_sum += kl3
             kl1_vals.append(kl1)
+            kl1_reverse_vals.append(kl1_reverse)
             kl2_vals.append(kl2)
+            kl2_reverse_vals.append(kl2_reverse)
             kl3_vals.append(kl3)
+            kl3_reverse_vals.append(kl3_reverse)
             nll_mcmc.append(nll_sum_mcmc.item() / n_repeats)
             nll_snf.append(nll_sum_snf.item() / n_repeats)
             nll_inn.append(nll_sum_inn.item()/n_repeats)
@@ -199,8 +204,11 @@ def evaluate(snf,diffusion_model, INN, out_dir, plot_dir, n_samples_y = 200, n_s
 
         prog_bar.close()
         kl1_vals = np.array(kl1_vals)
+        kl1_reverse_vals = np.array(kl1_reverse_vals)
         kl2_vals = np.array(kl2_vals)
+        kl2_reverse_vals = np.array(kl2_reverse_vals)
         kl3_vals = np.array(kl3_vals)
+        kl3_reverse_vals = np.array(kl3_reverse_vals)
         kl1_var = np.sum((kl1_vals - kl1_sum / n_samples_y) ** 2) / n_samples_y
         kl2_var = np.sum((kl2_vals - kl2_sum / n_samples_y) ** 2) / n_samples_y
         kl3_var = np.sum((kl3_vals - kl3_sum / n_samples_y) ** 2) / n_samples_y
@@ -209,7 +217,7 @@ def evaluate(snf,diffusion_model, INN, out_dir, plot_dir, n_samples_y = 200, n_s
         nll_diffusion = np.array(nll_diffusion)
         nll_inn = np.array(nll_inn)
         df = pd.DataFrame(
-            {'KL1': kl1_vals, 'KL2': kl2_vals, 'KL3': kl3_vals, 'NLL_mcmc': nll_mcmc, 'NLL_snf': nll_snf, 'NLL_diffusion': nll_diffusion, 'NLL_inn':nll_inn})
+            {'KL_SNF': kl1_vals, 'KL_SNF_reverse': kl1_reverse_vals, 'KL_diffusion': kl2_vals, 'KL_diffusion_reverse': kl2_reverse_vals, 'KL_INN': kl3_vals, 'KL_INN_reverse':kl3_reverse_vals, 'NLL_mcmc': nll_mcmc, 'NLL_snf': nll_snf, 'NLL_diffusion': nll_diffusion, 'NLL_inn':nll_inn})
         df.to_csv(os.path.join(out_dir, 'results.csv'))
         print('KL1:', kl1_sum / n_samples_y, '+-', kl1_var)
         print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
@@ -232,16 +240,30 @@ if __name__ == '__main__':
 
     a = 0.2
     b = 0.01
-    n_epochs_snf = 200
-    n_epochs_INN = 200
+    lambd_bd = 1000
+    # is added to KL Divergence to improve numerical stability
+    reg = 1e-10
+    n_epochs_snf = 1000
+    n_epochs_INN = 4000
     n_epochs_diffusion = 20000
 
-    train_dir = 'test/'
+    train_dir = 'examples/scatterometry/results/baselines2'
+    gt_path = 'examples/scatterometry/gt_samples/'
     log_dir = os.path.join(train_dir,'logs')
-    out_dir = 'results/scatterometry'
-    plot_dir = os.path.join(out_dir,'plots')
+    out_dir = os.path.join(train_dir, 'results')
 
-    if not os.path.exists(plot_dir):
-        os.makedirs(plot_dir)
+    if os.path.exists(log_dir):
+        shutil.rmtree(log_dir)
+        os.makedirs(log_dir)
+    else:
+        os.makedirs(log_dir)
+
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+        os.makedirs(out_dir)
+    else:
+        os.makedirs(out_dir)
+
+
     snf,diffusion_model,INN = train(forward_model, n_epochs_snf, n_epochs_diffusion, n_epochs_INN,batch_size=1000, lambd_bd=1000, save_dir = train_dir,log_dir=log_dir)
-    evaluate(snf,diffusion_model, INN, out_dir, n_samples_y=100, n_samples_x = 30000, n_plots = 10)
+    evaluate(snf,diffusion_model, INN, out_dir, gt_path, n_samples_y=100, n_samples_x = 30000)

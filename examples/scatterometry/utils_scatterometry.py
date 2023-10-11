@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import os
+from torch import nn
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -14,6 +15,23 @@ def get_epoch_data_loader(batch_size, forward_model,a, b,lambd_bd):
 
     return epoch_data_loader
 
+def get_forward_model_params(src_dir):
+    forward_model = nn.Sequential(nn.Linear(3, 256), nn.ReLU(),
+                                  nn.Linear(256, 256), nn.ReLU(),
+                                  nn.Linear(256, 256), nn.ReLU(),
+                                  nn.Linear(256, 23)).to(device)
+    forward_model.load_state_dict(
+        torch.load(os.path.join(src_dir, 'surrogate.pt'), map_location=torch.device(device)))
+    for param in forward_model.parameters():
+        param.requires_grad = False
+
+    a = 0.2
+    b = 0.01
+    lambd_bd = 1000
+    xdim = 3
+    ydim = 23
+
+    return forward_model,a,b,lambd_bd,xdim,ydim
 def get_dataset(forward_model,a,b,size=100):
     random_state = 13
     rand_gen = torch.manual_seed(random_state)

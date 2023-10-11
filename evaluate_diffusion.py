@@ -1,6 +1,4 @@
 import shutil
-
-import torch
 import matplotlib.pyplot as plt
 from torch.distributions import MultivariateNormal
 from sbi.analysis import pairplot, conditional_pairplot
@@ -10,7 +8,6 @@ import utils
 from include.sdeflow_light.lib import sdes
 import sys
 from sklearn.model_selection import train_test_split
-#sys.path.append("/home/matthias/Uni/SoSe22/Master/Inverse-Modelling-of-Hemodynamics/")
 from tqdm import tqdm
 import nets
 from models.diffusion import *
@@ -93,7 +90,7 @@ def evaluate(model,ys, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
         kl2_sum = 0.
         mse_score_vals = []
         kl2_vals = []
-        nbins = 200
+        nbins = 75
         # hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
         plot_ys = [3,5,22,39,51,53,60,71,81,97]
 

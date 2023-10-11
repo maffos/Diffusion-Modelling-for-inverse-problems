@@ -306,7 +306,7 @@ def langevin_step(x, stepsize, energy, lang_steps):
 # forward_model: pretrained forward_model (needed for forward KL loss)
 # a, b: error model parameters
 # get_prior_log_likelihood: method giving log prior
-def train_SNF_epoch(optimizer, snf, epoch_data_loader,forward_model,a,b,get_prior_log_likelihood):
+def train_SNF_epoch(optimizer, snf, epoch_data_loader,*forward_model_args):
     mean_loss = 0
     for k, (x, y) in enumerate(epoch_data_loader()):
         cur_batch_size = len(x)

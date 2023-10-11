@@ -14,6 +14,7 @@ import torch
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # mcmc parameters for "discovering" the ground truth
 NOISE_STD_MCMC = 0.5
@@ -76,7 +77,7 @@ def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, ba
 
     return model
 
-def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
+def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
     n_samples_y = ys.shape[0]
     model.eval()
     nll_diffusion = []
@@ -98,9 +99,9 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, n_samples_x=5000,n_r
         inflated_ys = y[None, :].repeat(n_samples_x, 1)
         mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
 
-        for _ in range(n_repeats):
+        for j in range(n_repeats):
             x_pred = get_grid(model, y, xdim, ydim, num_samples=n_samples_x)
-            x_true = anneal_to_energy(torch.rand(n_samples_x, xdim, device=device) * 2 - 1, mcmc_energy, METR_STEPS,noise_std=NOISE_STD_MCMC)[0].detach().cpu().numpy()
+            x_true = get_gt_samples(gt_dir,i,j)
             x_true_tensor = torch.from_numpy(x_true).to(device)
             # calculate MSE of score on test set
             t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
@@ -193,8 +194,8 @@ if __name__ == '__main__':
 
     params = {'loss_fn': ['PINNLoss4'],
     'lr': [1e-4],
-    'lam': [1.,.1,.001],
-    'lam2':[1.,.1],
+    'lam': [.001],
+    'lam2':[.0001,0.001],
     'pde_loss': ['FPE'],
     'metric': ['L1'],
     'ic_metric':['L1'],
@@ -202,6 +203,8 @@ if __name__ == '__main__':
     
     resume_training = False
     src_dir = 'new_folder_strucutre_scatterometry'
+    gt_dir = 'gt_samples'
+    
     for param_configuration in product_dict(**params):
         skip = False
         lr = param_configuration.pop('lr')
@@ -255,4 +258,4 @@ if __name__ == '__main__':
             print('-----------------')
             print(vars(loss_fn))
             model = train(model, optimizer, loss_fn,forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir, log_dir = log_dir)
-            evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=n_samples_x)
+            evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir,gt_dir, n_samples_x=n_samples_x)
