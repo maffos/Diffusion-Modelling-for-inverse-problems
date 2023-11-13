@@ -45,7 +45,7 @@ def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, ba
 
     return model
 
-def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10,xlim = (-1.2,1.2),nbins = 75):
+def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10,xlim = (-1.2,1.2),nbins = 75, figsize = (12,12), labelsize = 30):
     n_samples_y = ys.shape[0]
     model.eval()
     nll_diffusion = []
@@ -54,7 +54,7 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
     kl2_vals = []
     kl2_reverse_vals = []
     mse_score_vals = []
-    # randomly select some y's to plot the posterior (otherwise we would get ~2000 plots)
+    # plotted y's are rehardcoded for reproducability
     plot_y = [0,5,6,20,23,42,50,77,81,93]
     prog_bar = tqdm(total=n_samples_y)
     for i, y in enumerate(ys):
@@ -68,16 +68,19 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
         mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
 
         for j in range(n_repeats):
-            x_pred = get_grid(model, y, xdim, ydim, num_samples=n_samples_x)
+            x_pred = get_grid_CDE(model, y, xdim, ydim, num_samples=n_samples_x)
             x_true = get_gt_samples(gt_dir,i,j)
             x_true_tensor = torch.from_numpy(x_true).to(device)
+
             # calculate MSE of score on test set
             t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
             g_0 = model.base_sde.g(t0, x_true_tensor)
-            score_predict = model.a(x_true_tensor, t0.to(device), inflated_ys.to(device)) / g_0
+            #score_predict = model.a(x_true_tensor, t0.to(device), inflated_ys.to(device)) / g_0
+            score_predict = model.a(torch.concat([x_true_tensor, inflated_ys], dim=1), t0)[:,:xdim]
+            score_predict = score_predict / g_0
             score_true = score_posterior(x_true_tensor,inflated_ys)
-            #score_true = -energy_grad(x_true_tensor,mcmc_energy)
             mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
+
             # generate histograms
             hist_mcmc, _ = np.histogramdd(x_true, bins=(nbins, nbins, nbins),
                                           range=(xlim, xlim, xlim))
@@ -87,36 +90,18 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
             hist_mcmc_sum += hist_mcmc
             hist_diffusion_sum += hist_diffusion
 
-            # calculate negaitve log likelihood of the samples
+            # calculate negative log likelihood of the samples
             nll_sum_mcmc += mcmc_energy(x_true_tensor).sum() / n_samples_x
             nll_sum_diffusion += mcmc_energy(torch.from_numpy(x_pred).to(device)).sum() / n_samples_x
 
         # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
         if i in plot_y:
 
-            fig, ax = pairplot([x_true], limits = [xlim,xlim,xlim])
-            fname = os.path.join(out_dir, 'posterior-mcmc-%d.png' % i)
-            plt.savefig(fname)
-            plt.close()
-            utils.plot_density(x_true, nbins, limits = xlim,fname=os.path.join(out_dir, 'posterior-mcmc_own-%d'%i))
+            utils.plot_density(x_true, nbins, limits=(-1.2, 1.2), xticks=[-1, 0, 1], size=figsize, labelsize=labelsize,
+                         fname=os.path.join(out_dir, 'posterior-mcmc-%d.svg'%i))
 
-            fig, ax = pairplot([x_true])
-            fname = os.path.join(out_dir, 'posterior-mcmc_no-limits-%d.png' % i)
-            plt.savefig(fname)
-            plt.close()
-            utils.plot_density(x_true, nbins,fname=os.path.join(out_dir, 'posterior-mcmc_no-limits_own-%d'%i))
-
-            fig, ax = pairplot([x_pred], limits = [xlim,xlim,xlim])
-            fname = os.path.join(out_dir, 'posterior-diffusion-limits%d.png' % i)
-            plt.savefig(fname)
-            plt.close()
-            utils.plot_density(x_pred, nbins, limits = xlim,fname=os.path.join(out_dir, 'posterior-diffusion_own-%d'%i))
-
-            fig, ax = pairplot([x_pred])
-            fname = os.path.join(out_dir, 'posterior-diffusion-nolimits%d.png' % i)
-            plt.savefig(fname)
-            plt.close()
-            utils.plot_density(x_true, nbins,fname=os.path.join(out_dir, 'posterior-diffusion_no_limits_own-%d'%i))
+            utils.plot_density(x_pred, nbins, limits=(-1.2, 1.2), xticks=[-1, 0, 1], size=figsize, labelsize=labelsize,
+                     fname=os.path.join(out_dir, 'posterior-diffusion-%d.svg' % i))
 
 
         hist_mcmc = hist_mcmc_sum / hist_mcmc_sum.sum()
@@ -174,12 +159,16 @@ if __name__ == '__main__':
     score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,a,b,y,lambd_bd))[0]
     score_prior = lambda x: -x
 
-    hidden_layers = [512,512,512]
-    model = create_diffusion_model2(xdim,ydim,hidden_layers)
-    optimizer = Adam(model.a.parameters(), lr=1e-4)
-    loss_fn = PINNLoss4()
-    train_dir = ''
 
+    hidden_layers = [256,256]
+    model = create_diffusion_model_CDE(xdim+ydim, hidden_layers)
+    optimizer = Adam(model.a.parameters(), lr=1e-4)
+
+    #loss_fn = PosteriorLoss(forward_model,a,b, lam=0.001)
+    loss_fn = PINNLoss(score_posterior, lam = 1., lam2 = .001, pde_loss = 'FPE',ic_metric = 'L2', metric = 'L2')
+    #loss_fn = ErmonLoss(lam=1., pde_loss ='FPE')
+    train_dir = 'CDiffE/ErmonLoss'
+    gt_dir = 'gt_samples/'
     log_dir = os.path.join(train_dir, 'logs')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -190,4 +179,4 @@ if __name__ == '__main__':
     print('---------------------')
     model = train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, n_epochs, batch_size=1000,save_dir=train_dir, log_dir = log_dir)
     print('----------------------')
-    evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, n_samples_x=n_samples_x)
+    evaluate(model, y_test, forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=n_samples_x)

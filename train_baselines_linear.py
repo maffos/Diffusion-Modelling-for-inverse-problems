@@ -35,7 +35,7 @@ def log_posterior(xs,ys):
 
     y_res = ys - (A @ mu + b)
     mean = y_res@(A.T @ Sigma_y_inv)
-    x_res = (xs-mean)
+    x_res = xs-mean
     log_probs = .5*x_res@cov_inv
     log_probs = log_probs[:,None,:]@x_res[:,:,None]
 

@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-import torch
+import pandas as pd
+import scipy
+import scipy.stats as st
 import torch.utils.data
 import os
 import itertools
@@ -53,18 +55,13 @@ def load_gaussian_ring_dataset(labels, tot_dataset_size):
     labels = torch.tensor(labels[shuffling], dtype=torch.float)
 
     return pos, labels
-    
-def generate_dataset(name, **kwargs):
-    if name not in get_dataset_names():
-        raise ValueError(f"'{name}' is not one of the example datasets.")
-        
-    elif name == 'gaussian_ring':
-        return load_gaussian_ring_dataset(**kwargs)
-    
-    else:
-    
-        raise ValueError('This should not be displayed, update the list of known Datasets.')
-          
+
+def generate_dataset(xdim,f,n_samples, random_state = 7):
+
+    random_gen = torch.random.manual_seed(random_state)
+    x = torch.randn(n_samples,xdim, generator = random_gen)
+    y = f(x)
+    return x.float(),y.float()
 def load_dataset(filename):
     
     try:
@@ -134,6 +131,23 @@ def get_dataloader_scatterometry(x_train,y_train,sigma,batch_size,a):
 
     return epoch_data_loader
 
+def get_linear_params():
+    # define parameters of the inverse problem
+    epsilon = 1e-6
+    xdim = 2
+    ydim = 2
+    # f is a shear by factor 0.5 in x-direction and tranlsation by (0.3, 0.5).
+    A = torch.Tensor([[1, 0.5], [0, 1]])
+    b = torch.Tensor([0.3, 0.5])
+    scale = .3
+    Sigma = scale * torch.eye(ydim)
+    Lam = torch.eye(xdim)
+    Sigma_inv = 1 / scale * torch.eye(ydim)
+    Sigma_y_inv = torch.linalg.inv(Sigma + A @ Lam @ A.T + epsilon * torch.eye(ydim))
+    mu = torch.zeros(xdim)
+
+    return epsilon,xdim,ydim,A,b,scale,Sigma,Lam,Sigma_inv,Sigma_y_inv,mu
+
 #code was taken from https://stackoverflow.com/questions/5228158/cartesian-product-of-a-dictionary-of-lists
 def product_dict(**kwargs):
     keys = kwargs.keys()
@@ -178,7 +192,7 @@ def div_estimator(s,x,num_samples=1, rademacher = True):
     div /= num_samples
     return div
 
-def plot_density(samples, nbins, show = False, cmap = 'viridis', limits=None, fname = None):
+def plot_density(samples, nbins, size, labelsize = 12, show = False, cmap = 'viridis', limits=None, fname = None,xticks = None, show_mode = False):
     """
     Plot the density of the samples in a grid.
     Parameters:
@@ -186,7 +200,7 @@ def plot_density(samples, nbins, show = False, cmap = 'viridis', limits=None, fn
     - limit: A tuple defining the lower and upper limit for the histogram bin range.
     """
     n_samples, n_dims = samples.shape
-    fig, axes = plt.subplots(n_dims, n_dims, figsize=(15, 15))
+    fig, axes = plt.subplots(n_dims, n_dims, figsize=size)
     for i in range(n_dims):
         for j in range(n_dims):
             if i == j:
@@ -196,11 +210,48 @@ def plot_density(samples, nbins, show = False, cmap = 'viridis', limits=None, fn
                 else:
                     bins = np.linspace(np.min(samples[:, i]), np.max(samples[:, i]), nbins)
 
-                sns.histplot(samples[:, i], ax=axes[i, j], kde=False, element = 'step', bins=bins, fill=False)
+                # Calculate histogram data
+                hist, edges = np.histogram(samples[:, i], bins=bins)
+
+                # Plot the histogram
+                axes[i, j].step(edges[:-1], hist, where='mid', color='steelblue', linewidth=2)
                 axes[i, j].set_xlim(bins[0], bins[-1])
-                axes[i,j].set_ylabel('')
-                # Removing y axis labels for diagonal plots
+                axes[i, j].set_ylabel('')
+                axes[i, j].set_xlabel('dim%d' % i, size=labelsize)
+
+                # Draw a dashed line at the mode
+                if show_mode:
+                    # Find the mode (bin with maximum count)
+                    mode_index = np.argmax(hist)
+                    mode_value = (edges[mode_index] + edges[mode_index + 1]) / 2
+                    # Calculate bin centers
+                    bin_centers = (edges[:-1] + edges[1:]) / 2
+                    # Calculate weighted mean (considering each bin's count)
+                    weighted_mean = np.sum(hist * bin_centers) / np.sum(hist)
+                    axes[i, j].axvline(x=mode_value, color='lightsteelblue', linestyle='--', linewidth = 2)
+
+                # Remove y-axis labels
                 axes[i, j].set_yticklabels([])
+
+                # Set x-ticks
+                if xticks is None:
+                    x_min = .5*(edges[0]+edges[1])
+                    x_max = .5*(edges[-2]+edges[-1])
+                    if x_max < 0:
+                        xticks = [x_min, x_max]
+                    elif not show_mode:
+                        xticks = [x_min, 0, x_max]
+                    axes[i, j].set_xticks(xticks)
+                if show_mode:
+                    xticks = [xticks[0], weighted_mean, xticks[-1]]
+                    xticklabels = [xticks[0], np.round(weighted_mean,1), xticks[-1]]
+                else:
+                    xticklabels = xticks
+
+                axes[i,j].set_xticks(xticks)
+                axes[i,j].set_xticklabels(xticklabels,size =labelsize)
+                axes[i,j].set_yticks([])
+
                 sns.despine(left=True,top=True,right=True)
             elif i < j:
                 # 2D histogram off-diagonal
@@ -216,17 +267,16 @@ def plot_density(samples, nbins, show = False, cmap = 'viridis', limits=None, fn
                                   cmap=cmap)
                 axes[i, j].set_xlim(hist_range[0])
                 axes[i, j].set_ylim(hist_range[1])
-                sns.despine(right=True, top=True, bottom=True)
-                # For non-diagonal plots, share x and y
-                if j > i+1:
-                    axes[i, j].set_yticklabels([])
-                    sns.despine(left=True,right=True, top=True, bottom=True)
+                sns.despine(right=True, top=True, bottom=True, left = True)
 
                 axes[i, j].set_xticklabels([])
+                axes[i, j].set_xticks([])
+                axes[i,j].set_yticklabels([])
+                axes[i,j].set_yticks([])
             else:
                 # For the lower triangular plots, we make them blank
                 axes[i, j].axis('off')
-    plt.tight_layout()
+    #plt.tight_layout()
     if fname:
         plt.savefig(fname)
     if show:
@@ -234,6 +284,42 @@ def plot_density(samples, nbins, show = False, cmap = 'viridis', limits=None, fn
     else:
         plt.close()
 
+def plot_csv(file_path, fname, labelsize, max_step = 1000, show_plot = True):
+    """
+    Reads a CSV file and plots 'step' on the x-axis and 'value' on the y-axis.
+
+    Parameters:
+    - file_path (str): The path to the CSV file.
+    """
+    # Read the CSV file
+    df = pd.read_csv(file_path)
+
+    # Check if 'step' and 'value' columns exist
+    if 'Step' not in df.columns or 'Value' not in df.columns:
+        raise ValueError("Columns 'step' and 'value' must be in the CSV.")
+
+    # Filter the DataFrame based on the step_limit
+    df_limited = df[df['Step'] <= max_step]
+
+    # Plotting
+    plt.plot(df_limited['Step'], df_limited['Value'])
+
+    # Plotting
+
+    # Labeling axes
+    plt.xlabel('Step', size = labelsize)
+    plt.ylabel('Value', size = labelsize)
+
+    # Title and grid
+    plt.grid(True)
+
+    # Display the plot
+    plt.savefig(fname)
+
+    if show_plot:
+        plt.show()
+
+    plt.close()
 def make_image(pred_samples,x_true, num_epochs, output_dir = None, inds=None, show_plot = False, savefig = True):
 
     cmap = plt.cm.tab20

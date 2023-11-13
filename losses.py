@@ -5,92 +5,6 @@ from utils import divergence, div_estimator, batch_gradient
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-#todo: rename as metrics.py and write all Loss as classes
-def norm_pdf(y_obs, y_true, sigma):
-    """Returns gaussian log-likelihood"""
-    return (-0.5* (y_obs-y_true)**2/sigma**2).sum(axis=1)
-
-def mleLoss(z, log_det_J, latent_prior):
-    log_p_z = latent_prior.log_prob(z)
-    return torch.mean((-log_p_z+log_det_J))
-
-def forwardBackwardKLLoss(x,z,jac_inv, log_det_J, y_true, y_noise, latent_prior, likelihood_pdf, conv_lambda, sigma):
-    relu = torch.nn.ReLU()
-    forward_kl = mleLoss(z,-jac_inv, latent_prior)
-    backward_kl = torch.mean((-likelihood_pdf(y_noise, y_true, sigma) - log_det_J))
-    loss_relu = 100 * torch.sum(relu(x - 1) + relu(-x))
-    return forward_kl * (1 - conv_lambda) + (backward_kl + loss_relu) * conv_lambda
-
-def mean_relative_error(y_true, y_predict, epsilon = 1e-8):
-    #only add the epsilon in the denominator to avoid an infinite loss (the gradients can still explode however).
-    return torch.mean((y_true-y_predict)**2/(torch.abs(y_true)+epsilon))
-
-#code is taken from https://github.com/pdebench/PDEBench and modified according to Takamoto et al. (2022), to deal with ODEs
-class FftMseLoss(nn.Module):
-    """
-    loss function in Fourier space
-    June 2022, F.Alesiani
-    """
-    def __init__(self):
-        super(FftMseLoss, self).__init__()
-    def forward(self, y_true, y_pred, flow=None,fhigh=None):
-        yf_true = torch.fft.rfft(y_true,dim=1)
-        yf_pred = torch.fft.rfft(y_pred,dim=1)
-        if flow is None: flow = 0
-        if fhigh is None: fhigh = np.max(yf_true.shape[1])
-
-        #cut off unwanted frequencies
-        yf_true = yf_true[:,flow:fhigh]
-        yf_pred = yf_pred[:,flow:fhigh]
-
-        #loss = torch.mean(torch.sqrt(torch.abs(yf_true-yf_pred)**2)).to(device)
-        loss = torch.mean((yf_true-yf_pred).abs()**2)
-        return loss
-
-class MultipleLoss(nn.Module):
-
-    def __init__(self, loss1, loss2):
-        super(MultipleLoss, self).__init__()
-        self.loss1_fn = loss1
-        self.loss2_fn = loss2
-
-    """
-    So far only the MSE is considered as first loss. Probably we will not have to consider other types of loss functions.
-    Therefore params can only be passed to the second loss function. So far it is not planned to integrate passing
-    params to the first loss,too. But it might become necessary in the future.
-    """
-    def forward(self, y_true, y_predict, lmbd, **params):
-
-        loss = (1-lmbd)*self.loss1_fn(y_true,y_predict) + lmbd * self.loss2_fn(y_true, y_predict, **params)
-        return loss
-
-class DFMLoss(nn.Module):
-
-    def __init__(self):
-        super(DFMLoss, self).__init__()
-        self.name = 'DFMLoss'
-
-    def forward(self, model,sde,x,t,y):
-
-        x_t, target, std, g = sde.sample(1-t, x, return_noise=True)
-        v = model(x_t,t,y)
-        alpha = sde.mean_weight(1-t)
-        beta = g**2
-        #u=-.5*beta*alpha*(alpha*x_t-x)/(2*std**2) #with x_t
-        u = -.5*beta*alpha*(alpha*target-std*x)
-
-        loss = torch.sum((std*v-u)**2, dim=1)
-
-        if torch.any(torch.isnan(loss)):
-            print('x:',x[torch.where(torch.isnan(std))])
-            print('Std:',torch.where(torch.isnan(std)))
-            print('beta:',torch.any(torch.isnan(beta)))
-            print('alpha:',torch.any(torch.isnan(alpha)))
-            print('u:',torch.any(torch.isnan(u)))
-            print('v:',torch.any(torch.isnan(v)))
-            print('t:', t[torch.where(torch.isnan(std))])
-            raise ValueError('loss is nan')
-        return loss
        
 class DSMLoss(nn.Module):
     
@@ -103,6 +17,13 @@ class DSMLoss(nn.Module):
 
         batch_size = s.shape[0]
         return ((s * std + target) ** 2).view(batch_size, -1).sum(1, keepdim=False) / 2
+
+class CDiffELoss(nn.Module):
+    def __init__(self):
+        self.name = 'CDiffE'
+
+    def forward(self, model):
+        pass
 
 class CFMLoss(nn.Module):
 
@@ -152,7 +73,7 @@ class ScoreFPELoss(nn.Module):
             loss = torch.mean((ds_dt - .5 * beta * grad_x) ** 2, dim=1).view(batch_size, 1)
         return loss
 
-#Loss resulting from the HJB PDE. Only difference to the Score FPE is the minus sign of divergence term
+#Loss resulting from the HJB PDE. Only difference to the Score FPE is the minus sign of divergence term. Not icluded in the thesis.
 class ScoreHJBLoss(nn.Module):
 
     def __init__(self):
@@ -176,11 +97,11 @@ class ScoreHJBLoss(nn.Module):
         return loss
 
 #Loss as used by Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." 
-class ErmonLoss(nn.Module):
+class DSM_PDELoss(nn.Module):
 
     def __init__(self, lam=1., pde_loss='HJB'):
 
-        super(ErmonLoss,self).__init__()
+        super(DSM_PDELoss,self).__init__()
         self.lam = lam
         self.dsm_loss = DSMLoss()
         if pde_loss == 'HJB':
@@ -189,121 +110,109 @@ class ErmonLoss(nn.Module):
             self.pde_loss = ScoreFPELoss()
         else:
             self.pde_loss = CFMLoss()
-        self.name = 'ErmonLoss'
+        self.name = 'DSM_PDELoss'
 
     def forward(self,model,x,t,y):
 
-        x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
-        s = model.a(x_t, t,y)/g
+        z = torch.concat([x,y], dim = 1)
+        z_t, target, std, g = model.base_sde.sample(t, z, return_noise=True)
+        s = model.a(z_t, t)/g
         beta = model.base_sde.beta(t)
 
         MSE_u = self.dsm_loss(s,std,target)
         if self.pde_loss.name == 'CFMLoss':
             MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
         else:
-            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
+            MSE_pde = self.lam*self.pde_loss(s,z_t,t,beta)
         loss = MSE_u+MSE_pde
         return loss.mean(), {'DSM-Loss': MSE_u.mean(), 'PDE-Loss': MSE_pde.mean()}
 
 
+
 class PINNLoss(nn.Module):
+    '''
+        Implements the Physics-Informed-Neural-Network (PINNs) approach by Raissi et al. (2019).
 
-    def __init__(self, initial_condition, boundary_condition, lam = 1., lam2 = 1., lam3=1., pde_loss = 'HJB'):
+        Attributes:
+            lam (float): A scaling factor for the PDE loss component. Default value is 1.0.
+            lam2 (float): A scaling factor for the initial condition loss component. Default value is 1.0.
+            initial_condition (callable): A function representing the initial condition to be used in the loss calculation.
+            pde_loss (str): A string specifying the type of PDE loss to be used. Options are 'HJB', 'FPE', and others defaulting to 'CFMLoss'.
+            ic_metric (str): A string specifying the metric used for the initial condition loss. Options are 'L1' and 'L2'.
+            dsm_loss (DSMLoss): An instance of a DSMLoss class used to compute the data-driven component of the loss.
+            name (str): A string representing the name of the loss class. Set to 'PINNLoss4'.
 
-        super(PINNLoss,self).__init__()
+        Methods:
+            forward(model, x, t, y):
+                Computes the overall loss for the given input.
+
+                Parameters:
+                    model (nn.Module): The neural network model for which the loss is being computed.
+                    x (torch.Tensor): The spatial input tensor.
+                    t (torch.Tensor): The temporal input tensor.
+                    y (torch.Tensor): The target output tensor.
+
+                Returns:
+                    torch.Tensor: The computed loss value.
+                    dict: A dictionary containing individual components of the loss ('PDE-Loss', 'Initial Condition', 'DSM-Loss').
+
+        Example:
+            >>> loss_function = PINNLoss(initial_condition=my_initial_condition_function)
+            >>> loss, loss_components = loss_function(model, x, t, y)
+    '''
+
+    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'FPE',ic_metric = 'L1', **kwargs):
+
+        super(PINNLoss, self).__init__()
         self.lam = lam
         self.lam2 = lam2
-        self.lam3 = lam3
         self.initial_condition = initial_condition
-        self.boundary_condition = boundary_condition
         if pde_loss == 'HJB':
-            self.pde_loss = ScoreHJBLoss()
+            self.pde_loss = ScoreHJBLoss(**kwargs)
         elif pde_loss == 'FPE':
-            self.pde_loss = ScoreFPELoss()
+            self.pde_loss = ScoreFPELoss(**kwargs)
         else:
-            self.pde_loss = CFMLoss()
-        self.eval_metric = DSMLoss()
-        self.name = 'PinnLoss'
+            self.pde_loss = CFMLoss(**kwargs)
+        self.dsm_loss = DSMLoss()
+        self.name = 'PINNLoss4'
+        self.ic_metric = ic_metric
 
-    def forward(self, model,x,t,y):
+    def forward(self,model,x,t,y):
 
         batch_size = x.shape[0]
-        x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
-        x_t = x_t.to(x.device)
-        t0 = torch.zeros_like(t).to(x.device)
-        T = torch.ones_like(t).to(x.device)
-        g_0 = model.base_sde.g(t0, x_t)
-        x_T, target_T, std_T, g_T = model.base_sde.sample(T, x, return_noise=True)
-        x_T = x_T.to(x.device)
-        beta = model.base_sde.beta(t)
-
-        s_0 = model.a(x, t0, y) / g_0
-        s = model.a(x_t, t, y) / g
-        s_T = model.a(x_T, T, y)/g_T
-
-        initial_condition_loss = self.lam2*torch.mean((s_0-self.initial_condition(x,y))**2, dim=1).view(batch_size,1)
-        boundary_condition_loss = self.lam3*torch.mean((s_T-self.boundary_condition(x_T))**2, dim=1).view(batch_size,1)
-        MSE_u = initial_condition_loss+boundary_condition_loss
-        if self.pde_loss.name == 'CFMLoss':
-            MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
-        else:
-            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
-        loss = torch.mean(MSE_u + MSE_pde)
-
-        eval_metric = self.eval_metric(s,std,target)
-        return loss, {'PDE-Loss':MSE_pde.mean(), 'Initial Condition':initial_condition_loss.mean(), 'Boundary Condition':boundary_condition_loss.mean(), 'DSMLoss': eval_metric.mean()}
-    
-#PINNLoss+DSMLoss
-class PINNLoss2(PINNLoss):
-
-    def __init__(self,initial_condition,boundary_condition, lam = 1., lam2 = 1., lam3 = 1., pde_loss = 'HJB'):
-
-        super(PINNLoss2, self).__init__(initial_condition,boundary_condition, lam, lam2, lam3)
-        self.dsm_loss = DSMLoss()
-        if pde_loss == 'HJB':
-            self.pde_loss = ScoreHJBLoss()
-        elif pde_loss == 'FPE':
-            self.pde_loss = ScoreFPELoss()
-        else:
-            self.pde_loss = CFMLoss()
-        self.name = 'PINNLoss2'
-
-    def forward(self, model,x,t,y):
-
-        batch_size= x.shape[0]
-        x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
+        xdim = x.shape[1]
+        z = torch.concat([x,y], dim= 1)
+        z_t, target, std, g = model.base_sde.sample(t, z, return_noise=True)
+        #g = g[:,:xdim]
+        #std = std[:,:xdim]
         t0 = torch.zeros_like(t)
-        T = torch.ones_like(t)
-        g_0 = model.base_sde.g(t0, x_t)
-        x_T, target_T, std_T, g_T = model.base_sde.sample(T, x, return_noise=True)
+        g_0 = model.base_sde.g(t0, z)
         beta = model.base_sde.beta(t)
-    
-        s_0 = model.a(x, t0, y)/g_0
-        s_T = model.a(x_T, T, y)/g_T
-        s = model.a(x_t, t,y)/g
 
-        initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
-            batch_size, 1)
-        boundary_condition_loss = self.lam3 * torch.mean((s_T - self.boundary_condition(x_T)) ** 2, dim=1).view(
-            batch_size, 1)
-        dsm_loss = self.dsm_loss(s, std, target)
-        MSE_u = initial_condition_loss + boundary_condition_loss+dsm_loss
+        s_0 = model.a(z, t0)/g_0
+        s = model.a(z_t, t)/g
+        if self.ic_metric == 'L2':
+            initial_condition_loss = self.lam2 * torch.mean((s_0[:,:xdim] - self.initial_condition(x, y)) ** 2, dim=1).view(batch_size, 1)
+        elif self.ic_metric == 'L1':
+            initial_condition_loss = self.lam2 * torch.mean(torch.abs(s_0 - self.initial_condition(x, y)), dim=1).view(batch_size, 1)
+        dsm_loss = self.dsm_loss(s,std,target)
+        #dsm_loss = self.dsm_loss(s, std, target)
         if self.pde_loss.name == 'CFMLoss':
             MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
         else:
-            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
-        loss = torch.mean(MSE_u + MSE_pde)
+            MSE_pde = self.lam*self.pde_loss(s,z_t,t,beta)
+        MSE_u = dsm_loss+initial_condition_loss
+        loss = torch.mean(MSE_u+ MSE_pde)
 
-        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(),
-                      'Boundary Condition': boundary_condition_loss.mean(), 'DSM-Loss': dsm_loss.mean()}
+        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM-Loss':dsm_loss.mean()}
 
 
-#calculates PINN loss without boundary condition term
-class PINNLoss3(nn.Module):
+#similar to the PINNLoss but without the data-driven DSM-loss term.
+class PINNLoss2(nn.Module):
 
     def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'HJB'):
 
-        super(PINNLoss3, self).__init__()
+        super(PINNLoss2, self).__init__()
         self.lam = lam
         self.lam2 = lam2
         self.initial_condition = initial_condition
@@ -340,48 +249,103 @@ class PINNLoss3(nn.Module):
         eval_metric = self.eval_metric(s,std,target)
         return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM-Loss': eval_metric.mean()}
 
-#calculates PINN loss without boundary condition term but with dsm loss
-class PINNLoss4(nn.Module):
+class PosteriorLoss(nn.Module):
 
-    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'FPE',ic_metric = 'L1', **kwargs):
+    #todo: Generalize for other inverse problems than scatterometry.
+    '''
+    Implements the work in Chung & Kim et al. (2023) using Neural Networks, where the posterior score is split into the prior p_t(x_t) and likelihood
+    term p_t(y|x_t). Both scores are approximated by two neural networks which are jointly trained using the PosteriorLoss(). This class only works on the scatterometry dataset so far.
+    Not used in the Master thesis.
 
-        super(PINNLoss4, self).__init__()
-        self.lam = lam
-        self.lam2 = lam2
-        self.initial_condition = initial_condition
-        if pde_loss == 'HJB':
-            self.pde_loss = ScoreHJBLoss(**kwargs)
-        elif pde_loss == 'FPE':
-            self.pde_loss = ScoreFPELoss(**kwargs)
-        else:
-            self.pde_loss = CFMLoss(**kwargs)
+    This class implements a loss calculation that combines a data-driven Score Matching loss (DSM) and a likelihood loss term, 
+    which is particularly tailored for scenarios where both prior and likelihood components are crucial.
+
+    Attributes:
+        name (str): Name of the loss class, set to 'PosteriorLoss'.
+        dsm_loss (DSMLoss): An instance of a DSMLoss class used to compute loss term for the prior score model.
+        forward_model (nn.Module): A neural network model representing the forward process in the likelihood term.
+        a (float): Parameter of the forward model to calculate the likelihood term.
+        b (float): Parameter of the forward model to calculate the likelihood term.
+        lam (float): A scaling factor for the likelihood loss component.
+
+    Methods:
+        likelihood_target(self, x_0, y, x_t, s, sigma):
+            Calculates the likelihood score of p(y|x_0).
+
+            Parameters:
+                x_0 (torch.Tensor): The mean of p(x_0|x_t) as described by Chung&Kim (2023).
+                y (torch.Tensor): The measurement tensor to calculate the conditional score of p(x|y).
+                x_t (torch.Tensor): The transformed state tensor.
+                s (torch.Tensor): The score tensor.
+                sigma (float): The standard deviation parameter.
+
+            Returns:
+                torch.Tensor: The calculated likelihood score.
+
+        forward(self, model, x, t, y):
+            Computes the overall loss for the given input.
+
+            Parameters:
+                model (nn.Module): The neural network model for which the loss is being computed. Instance of nets.PosteriorDrift().
+                x (torch.Tensor): The input tensor.
+                t (torch.Tensor): The temporal input tensor.
+                y (torch.Tensor): The target output tensor.
+
+            Returns:
+                torch.Tensor: The computed loss value.
+                dict: A dictionary containing individual components of the loss ('PriorLoss', 'LikelihoodLoss').
+
+    Example:
+        >>> loss_function = PosteriorLoss(forward_model=my_forward_model, a=1.0, b=1.0, lam=0.5)
+        >>> loss, loss_components = loss_function(model, x, t, y)
+    '''
+    def __init__(self, forward_model,a,b, lam):
+        super(PosteriorLoss, self).__init__()
+        self.name = 'PosteriorLoss'
         self.dsm_loss = DSMLoss()
-        self.name = 'PINNLoss4'
-        self.ic_metric = ic_metric
+        self.forward_model = forward_model
+        self.a = a
+        self.b = b
+        self.lam = lam
 
-    def forward(self,model,x,t,y):
+    def likelihood_target(self,x_0,y,x_t, s, sigma):
+        f_x = self.forward_model(x_0)
+        prefactor = ((self.a * f_x) ** 2 + self.b ** 2)
 
-        batch_size = x.shape[0]
+        #define vectors for the vector-Jacobian products
+        v1 = f_x/prefactor
+        v2 = (y-f_x)/prefactor
+        v3 = (y-f_x)**2*f_x/prefactor
+
+        #compute vector-jacobian products
+        vjp1 = torch.autograd.grad(f_x, x_0, v1, retain_graph = True)[0]
+        vjp2 = torch.autograd.grad(f_x, x_0, v2, retain_graph = True)[0]
+        vjp3 = torch.autograd.grad(f_x, x_0, v3, retain_graph = True)[0]
+        
+        #compute vector-Hessian products
+        vhp1 = torch.autograd.grad(s, x_t, vjp1, retain_graph = True)[0]
+        vhp2 = torch.autograd.grad(s, x_t, vjp2, retain_graph = True)[0]
+        vhp3 = torch.autograd.grad(s, x_t, vjp3, retain_graph = True)[0]
+        
+        #calculate the likelihood score of p(y|x_0)
+        score = -self.a**2*(sigma**2 * vhp1+ vjp1) + sigma**2 * vhp2+ vjp2 + self.a**2*(sigma**2*vhp3+vjp3)
+
+        return score
+    def forward(self, model, x, t, y):
+
         x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
-        t0 = torch.zeros_like(t)
-        g_0 = model.base_sde.g(t0, x_t)
-        beta = model.base_sde.beta(t)
+        s_prior = model.a.prior_net(x_t, t)
+        s_likelihood = model.a.likelihood_net(x_t,t,y)
+        alpha = model.base_sde.mean_weight(t)
+        prior_loss = self.dsm_loss(s_prior, std,target)
 
-        s_0 = model.a(x, t0, y)/g_0
-        s = model.a(x_t, t,y)/g
+        #calculate the loss for the likelihood model
+        x_0 = 1/model.base_sde.mean_weight(t)*(x_t+std**2*s_prior)
+        likelihood_loss = torch.sum((alpha*s_likelihood - self.likelihood_target(x_0,y,x_t,s_prior, std))**2,dim=1)
 
-        if self.ic_metric == 'L2':
-            initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(batch_size, 1)
-        elif self.ic_metric == 'L1':
-            initial_condition_loss = self.lam2 * torch.mean(torch.abs(s_0 - self.initial_condition(x, y)), dim=1).view(batch_size, 1)
-        dsm_loss = self.dsm_loss(s,std,target)
-        #dsm_loss = self.dsm_loss(s, std, target)
-        if self.pde_loss.name == 'CFMLoss':
-            MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
-        else:
-            MSE_pde = self.lam*self.pde_loss(s,x_t,t,beta)
-        MSE_u = dsm_loss+initial_condition_loss
-        loss = torch.mean(MSE_u+ MSE_pde)
+        loss = torch.mean(prior_loss+self.lam*likelihood_loss)
 
-        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM-Loss':dsm_loss.mean()}
+        return loss, {'PriorLoss': prior_loss.mean(), 'LikelihoodLoss': self.lam*likelihood_loss.mean()}
+
+
 

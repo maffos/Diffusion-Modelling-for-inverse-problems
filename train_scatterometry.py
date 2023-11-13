@@ -97,6 +97,7 @@ def evaluate(snf,diffusion_model, INN, out_dir, gt_path, n_samples_y = 100, n_sa
         kl2_reverse_vals = []
         kl3_vals = []
         kl3_reverse_vals = []
+        mse_score_vals = []
         nbins = 75
         xlim = (-1.2,1.2)
 
@@ -113,6 +114,7 @@ def evaluate(snf,diffusion_model, INN, out_dir, gt_path, n_samples_y = 100, n_sa
             nll_sum_snf = 0
             nll_sum_diffusion = 0
             nll_sum_inn = 0.
+            mse_score_sum = 0
             inflated_ys = y[None, :].repeat(n_samples_x, 1)
 
             mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
@@ -122,7 +124,15 @@ def evaluate(snf,diffusion_model, INN, out_dir, gt_path, n_samples_y = 100, n_sa
                 x_pred_snf = snf.forward(torch.randn(n_samples_x, xdim, device=device), inflated_ys)[0].detach().cpu().numpy()
                 x_pred_inn = INN(torch.randn(n_samples_x, xdim, device=device), c = inflated_ys)[0].detach().cpu().numpy()
                 x_true = get_gt_samples(gt_path, i,j)
-        
+                x_true_tensor = torch.from_numpy(x_true).to(device)
+
+                # calculate MSE of score on test set
+                t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
+                g_0 = diffusion_model.base_sde.g(t0, x_true_tensor)
+                score_predict = diffusion_model.a(x_true_tensor, t0.to(device), inflated_ys.to(device)) / g_0
+                score_true = score_posterior(x_true_tensor, inflated_ys)
+                mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
+
                 # generate histograms
                 hist_mcmc, _ = np.histogramdd(x_true, bins=(nbins, nbins, nbins),
                                               range=(xlim, xlim, xlim))
@@ -199,6 +209,8 @@ def evaluate(snf,diffusion_model, INN, out_dir, gt_path, n_samples_y = 100, n_sa
             nll_snf.append(nll_sum_snf.item() / n_repeats)
             nll_inn.append(nll_sum_inn.item()/n_repeats)
             nll_diffusion.append(nll_sum_diffusion.item() / n_repeats)
+            mse_score_vals.append(mse_score_sum.item() / n_repeats)
+
             prog_bar.set_description('KL_SNF: {:.3f}, KL_diffusion: {:.3f}'.format(np.mean(kl1_vals),np.mean(kl2_vals)))
             prog_bar.update()
 
@@ -217,7 +229,10 @@ def evaluate(snf,diffusion_model, INN, out_dir, gt_path, n_samples_y = 100, n_sa
         nll_diffusion = np.array(nll_diffusion)
         nll_inn = np.array(nll_inn)
         df = pd.DataFrame(
-            {'KL_SNF': kl1_vals, 'KL_SNF_reverse': kl1_reverse_vals, 'KL_diffusion': kl2_vals, 'KL_diffusion_reverse': kl2_reverse_vals, 'KL_INN': kl3_vals, 'KL_INN_reverse':kl3_reverse_vals, 'NLL_mcmc': nll_mcmc, 'NLL_snf': nll_snf, 'NLL_diffusion': nll_diffusion, 'NLL_inn':nll_inn})
+            {'KL_SNF': kl1_vals, 'KL_SNF_reverse': kl1_reverse_vals, 'KL_diffusion': kl2_vals,
+             'KL_diffusion_reverse': kl2_reverse_vals,'KL_INN': kl3_vals, 'KL_INN_reverse':kl3_reverse_vals,
+             'NLL_mcmc': nll_mcmc, 'NLL_snf': nll_snf, 'NLL_diffusion': nll_diffusion, 'NLL_inn':nll_inn,
+             'MSE':np.array(mse_score_vals)})
         df.to_csv(os.path.join(out_dir, 'results.csv'))
         print('KL1:', kl1_sum / n_samples_y, '+-', kl1_var)
         print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
@@ -251,6 +266,8 @@ if __name__ == '__main__':
     gt_path = 'examples/scatterometry/gt_samples/'
     log_dir = os.path.join(train_dir,'logs')
     out_dir = os.path.join(train_dir, 'results')
+
+    score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,a,b,y,lambd_bd))[0]
 
     if os.path.exists(log_dir):
         shutil.rmtree(log_dir)

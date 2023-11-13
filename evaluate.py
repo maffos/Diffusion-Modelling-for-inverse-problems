@@ -14,68 +14,85 @@ def get_params_from_path_ermonloss(path):
 
 def get_params_from_path(path):
     params = {}
-    params['metric'] = path[6]
-    params['ic-metric'] = path[7]
-    params['lam'] = path[8]
+    if 'lr' in path[-1]:
+        params['metric'] = path[-5]
+        params['ic-metric'] = path[-4]
+        params['lam'] = path[-3]
+        params['lam2'] = path[-2]
     # params['lr'] = path[-1]
 
-    if 'lam2' in path[-1]:
+    else:
+        params['metric'] = path[-4]
+        params['ic-metric'] = path[-3]
+        params['lam'] = path[-2]
         params['lam2'] = path[-1]
-    elif 'lam2' in path[-2]:
-        params['lam2'] = path[-2]
-    elif 'lam2' in path[-3]:
+
+    if 'lam2' in path[-3]:
         params['lam2'] = path[-3]
+        raise ValueError('was isch ebbet nu los?')
 
     return params
 
-def traverse_subfolders(source_dir, exclude = [], linear = False):
+def traverse_subfolders(source_dir, exclude = [], linear = False, result_key = 'results3'):
     best_params_kl = {}
     best_params_nll = {}
     best_params_mse = {}
+    best_params_kl_reverse = {}
     best_kl = np.infty
     best_nll = np.infty
     best_mse = np.infty
+    best_kl_reverse = np.infty
     for root, dirs, files in os.walk(source_dir):
         for dir_name in dirs:
             subfolder_path = os.path.join(root, dir_name)
-            if all(x not in subfolder_path for x in exclude):
-                if ('results2' in subfolder_path and linear) or ('results' in subfolder_path and not linear):
-                    results_csv = os.path.join(subfolder_path, "results.csv")
-                    if os.path.isfile(results_csv):
-                        df = pd.read_csv(results_csv)
-                        try:
-                            kl = df['KL2'].mean()
-                        except:
-                            kl = df['KL'].mean()
-
-                        if linear:
-                            nll_diff = np.mean(np.abs(df['NLL_true']-df['NLL_diffusion']))
+            if all(x not in subfolder_path for x in exclude) and result_key in subfolder_path:
+                results_csv = os.path.join(subfolder_path, "results.csv")
+                if os.path.isfile(results_csv):
+                    df = pd.read_csv(results_csv)
+                    try:
+                        kl = df['KL2'].mean()
+                        kl_vals = df['KL2']
+                    except:
+                        kl = df['KL'].mean()
+                    try:
+                        kl_reverse = df['KL_reverse'].mean()
+                    except:
+                        kl_reverse = np.nan
+                    if linear:
+                        nll_diff = np.mean(np.abs(df['NLL_true']-df['NLL_diffusion']))
+                    else:
+                        nll_diff = np.mean(np.abs(df['NLL_mcmc']-df['NLL_diffusion']))
+                    try:
+                        mse = df['MSE'].mean()
+                    except:
+                        mse = np.infty
+                    path = subfolder_path.split('/')
+                    if (kl < best_kl):
+                        if 'ErmonLoss' in path:
+                            best_params_kl = get_params_from_path_ermonloss(path)
                         else:
-                            nll_diff = np.mean(np.abs(df['NLL_mcmc']-df['NLL_diffusion']))
-                        try:
-                            mse = df['MSE'].mean()
-                        except:
-                            mse = np.infty
-                        path = subfolder_path.split('/')
-                        if (kl < best_kl):
-                            if 'ErmonLoss' in path:
-                                best_params_kl = get_params_from_path_ermonloss(path)
-                            else:
-                                best_params_kl = get_params_from_path(path)
-                            best_kl = kl
-                        if nll_diff < best_nll:
-                            if 'ErmonLoss' in path:
-                                best_params_nll = get_params_from_path_ermonloss(path)
-                            else:
-                                best_params_nll = get_params_from_path(path)
-                            best_nll = nll_diff
-                        if mse < best_mse:
-                            if 'ErmonLoss' in path:
-                                best_params_mse = get_params_from_path_ermonloss(path)
-                            else:
-                                best_params_mse = get_params_from_path(path)
-                            best_mse = mse
-    return best_params_kl,best_params_nll,best_params_mse, best_kl,best_nll,best_mse
+                            best_params_kl = get_params_from_path(path)
+                        best_kl = kl
+                    if (kl_reverse < best_kl_reverse):
+                        if 'ErmonLoss' in path:
+                            best_params_kl_reverse = get_params_from_path_ermonloss(path)
+                        else:
+                            best_params_kl_reverse = get_params_from_path(path)
+                        best_kl_reverse = kl_reverse
+                    if nll_diff < best_nll:
+                        if 'ErmonLoss' in path:
+                            best_params_nll = get_params_from_path_ermonloss(path)
+                        else:
+                            best_params_nll = get_params_from_path(path)
+                        best_nll = nll_diff
+                    if mse < best_mse:
+                        if 'ErmonLoss' in path:
+                            best_params_mse = get_params_from_path_ermonloss(path)
+                        else:
+                            best_params_mse = get_params_from_path(path)
+                        best_mse = mse
+
+    return best_params_kl,best_params_kl_reverse, best_params_nll,best_params_mse, best_kl,best_kl_reverse,best_nll,best_mse
 
 def compare_2_methods(path_method_1, path_method_2):
     best_params = {}
@@ -100,17 +117,20 @@ def compare_2_methods(path_method_1, path_method_2):
     print('Method2: ', score2)
     return best_params, best_score
 # Usage
-source_directory = 'examples/scatterometry/results/CFM/ErmonLoss/3layer/'
+source_directory = 'examples/linearModel/reverse_kl/results/FPE/PINNLoss4/3layer/L1/L1'
 if not os.path.exists(source_directory):
     raise ValueError('Source directory doesnt exist')
-exclude = []
-params_kl,params_nll,params_mse,kl,nll,mse = traverse_subfolders(source_directory, exclude,linear = False)
+exclude = ['lam2:10.0']
+params_kl,params_kl_reverse, params_nll,params_mse,kl,kl_reverse,nll,mse = traverse_subfolders(source_directory, exclude, result_key= 'results', linear = True)
 #path1 = 'examples/scatterometry/dsm-loss'
 #path2 = 'examples/scatterometry/scatterometry_runs_new/CFM/ErmonLoss/4layer/L2/lam:0.1/lr:0.0001/results'
 #params,score = compare_2_methods(path1,path2)
 print('---------------------------------')
 print('Best KL: ', kl)
 print(params_kl)
+print('---------------------------------')
+print('Best KL reverse: ', kl_reverse)
+print(params_kl_reverse)
 print('-------------------')
 print('Best NLL: ', nll)
 print(params_nll)

@@ -54,22 +54,28 @@ class MLP(nn.Sequential):
         assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
         return super().forward(input)
 
+class MLP2(nn.Sequential):
 
+    def __init__(self, input_dim, output_dim, hidden_layers, activation):
 
-"""
-class TemporalMLP(MLP):
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.hidden_layers = hidden_layers
 
-    def __init__(self, input_dim,output_dim,hidden_layers, embed_dim):
+        super().__init__(nn.Linear(input_dim, hidden_layers[0]), activation)
+        self.act = activation
+        for i in range(len(hidden_layers)-1):
+            self.append(nn.Linear(hidden_layers[i], hidden_layers[i+1]))
+            self.append(self.act)
+        self.append(nn.Linear(hidden_layers[-1], output_dim))
 
-        super().__init__(input_dim+embed_dim,output_dim, hidden_layers)
-        self.embed = utils.GaussianFourierProjection(embed_dim)
+    def forward(self, x,t):
+        #inputs = torch.cat([input] + list(more_inputs), dim = 1)
+        #inputs = torch.flatten(inputs, start_dim= 1)
+        input = torch.cat([x, t.view(len(x),1)], dim=1)
+        assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
+        return super().forward(input)
 
-    def forward(self, x,t,*more_inputs):
-        t_embed = self.embed(t.squeeze())
-        return super().forward(x,t_embed,*more_inputs)
-        
-
-"""
 class TemporalMLP(nn.Module):
 
     def __init__(self, input_dim, output_dim, embed_dim, hidden_layers, activation='tanh'):
@@ -148,3 +154,15 @@ class TemporalMLP_small(nn.Module):
         x = self.fc6(x)
 
         return x
+
+class PosteriorDrift(torch.nn.Module):
+
+    def __init__(self, prior_net, likelihood_net, forward_process):
+        super(PosteriorDrift, self).__init__()
+        self.prior_net = prior_net
+        self.likelihood_net = likelihood_net
+        self.forward_sde = forward_process
+
+    def forward(self, x, t, y):
+        posterior_score = self.prior_net(x, t) + self.likelihood_net(x, t, y)
+        return self.forward_sde.g(t, x) * posterior_score
