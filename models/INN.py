@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from FrEIA.framework import InputNode, OutputNode, Node, ReversibleGraphNet, ConditionNode
 from FrEIA.modules import GLOWCouplingBlock
+# taken from https://github.com/PaulLyonel/conditionalSNF/tree/main
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 

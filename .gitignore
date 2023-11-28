@@ -132,6 +132,9 @@ dmypy.json
 data/
 runs/
 include/
+Trash/
+old_hemodynamics/
+server_programs/
 
 #logs
 *.tfevents.*

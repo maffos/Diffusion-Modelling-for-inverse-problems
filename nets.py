@@ -5,32 +5,6 @@ from FrEIA.framework import InputNode, OutputNode, Node, GraphINN, ConditionNode
 from FrEIA.modules import GLOWCouplingBlock
 import os
 import utils
-
-class INN(GraphINN):
-
-    def __init__(self,num_layers, sub_net_size,dimension,dimension_condition):
-
-        self.sub_net_size = sub_net_size
-        self.num_layers = num_layers
-        self.input_dimension = dimension
-        self.condition_dimension = dimension_condition
-        self.nodes = [InputNode(dimension, name='input')]
-        self.condition = ConditionNode(dimension_condition, name='condition')
-
-        for k in range(num_layers):
-            self.nodes.append(Node(self.nodes[-1],
-                              GLOWCouplingBlock,
-                              {'subnet_constructor':self.subnet_fn, 'clamp':1.4},
-                              conditions = self.condition,
-                              name=F'coupling_{k}'))
-        self.nodes.append(OutputNode(self.nodes[-1], name='output'))
-
-        super().__init__(self.nodes + [self.condition], verbose=False)
-
-    def subnet_fn(self, c_in, c_out):
-        return nn.Sequential(nn.Linear(c_in, self.sub_net_size), nn.ReLU(),
-                             nn.Linear(self.sub_net_size, self.sub_net_size), nn.ReLU(),
-                             nn.Linear(self.sub_net_size,  c_out))
     
 class MLP(nn.Sequential):
 
@@ -47,10 +21,8 @@ class MLP(nn.Sequential):
             self.append(self.act)
         self.append(nn.Linear(hidden_layers[-1], output_dim))
 
-    def forward(self, x,t,y):
-        #inputs = torch.cat([input] + list(more_inputs), dim = 1)
-        #inputs = torch.flatten(inputs, start_dim= 1)
-        input = torch.cat([x, t.view(len(x),1), y], dim=1)
+    def forward(self, x,y,t):
+        input = torch.cat([x, y, t.view(len(x),1)], dim=1)
         assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
         return super().forward(input)
 
@@ -69,14 +41,19 @@ class MLP2(nn.Sequential):
             self.append(self.act)
         self.append(nn.Linear(hidden_layers[-1], output_dim))
 
-    def forward(self, x,t):
+    def forward(self,x,t):
         #inputs = torch.cat([input] + list(more_inputs), dim = 1)
         #inputs = torch.flatten(inputs, start_dim= 1)
-        input = torch.cat([x, t.view(len(x),1)], dim=1)
+        input = torch.cat([x,t.view(len(x),1)], dim=1)
         assert input.ndim == 2, 'Input Tensor is expected to be 2D with shape (batch_size, ydim+ydim+embeddim)'
         return super().forward(input)
 
+
 class TemporalMLP(nn.Module):
+    """
+    Embeds the time variable with a gaussian fourier projection. Hidden layers are hard coded.
+    Initial experiments showed no promising results so not considered in any further work.
+    """
 
     def __init__(self, input_dim, output_dim, embed_dim, hidden_layers, activation='tanh'):
 
@@ -155,14 +132,18 @@ class TemporalMLP_small(nn.Module):
 
         return x
 
-class PosteriorDrift(torch.nn.Module):
+class PosteriorScore(torch.nn.Module):
+    """
+    Calculates the score of a posterior distribution by adding the prior and the likelihood score.
+    Both of which are represented by neural nets.
+    """
 
     def __init__(self, prior_net, likelihood_net, forward_process):
-        super(PosteriorDrift, self).__init__()
+        super(PosteriorScore, self).__init__()
         self.prior_net = prior_net
         self.likelihood_net = likelihood_net
         self.forward_sde = forward_process
 
-    def forward(self, x, t, y):
-        posterior_score = self.prior_net(x, t) + self.likelihood_net(x, t, y)
+    def forward(self, x,y,t):
+        posterior_score = self.prior_net(x, t) + self.likelihood_net(x,y,t)
         return self.forward_sde.g(t, x) * posterior_score

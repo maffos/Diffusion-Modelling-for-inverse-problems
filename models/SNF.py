@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# taken from https://github.com/PaulLyonel/conditionalSNF/tree/main
 
 import numpy as np
 from tqdm import tqdm
