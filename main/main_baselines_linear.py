@@ -1,11 +1,12 @@
-from sbi.analysis import pairplot
 import matplotlib.pyplot as plt
-from examples.linearModel.main_diffusion import generate_dataset, f,get_posterior, score_posterior,get_evidence,get_likelihood,get_dataloader_dsm
+from linear_problem import LinearForwardProblem
 from models.diffusion import *
 from models.SNF import *
 from models.INN import *
 from losses import *
-from utils import get_dataloader_noise,plot_density
+from datasets import generate_dataset_linear, get_dataloader_linear
+import utils
+import argparse
 import scipy
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -15,44 +16,14 @@ from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 import torch
 
-# define parameters of the forward and inverse problem
-epsilon = 1e-6
-xdim = 2
-ydim = 2
-# f is a shear by factor 0.5 in x-direction and tranlsation by (0.3, 0.5).
-A = torch.Tensor([[1, 0.5], [0, 1]])
-b = torch.Tensor([0.3, 0.5])
-scale = .3  # measurement noise
-Sigma = scale * torch.eye(ydim)
-Lam = torch.eye(xdim)
-Sigma_inv = 1 / scale * torch.eye(ydim)
-Sigma_y_inv = torch.linalg.inv(Sigma + A @ Lam @ A.T + epsilon * torch.eye(ydim))
-mu = torch.zeros(xdim)
-cov = Lam - A.T @ Sigma_y_inv @ A #covariance of the posterior
-cov_inv = torch.linalg.inv(cov+epsilon*torch.eye(xdim))
-
-def log_posterior(xs,ys):
-
-    y_res = ys - (A @ mu + b)
-    mean = y_res@(A.T @ Sigma_y_inv)
-    x_res = xs-mean
-    log_probs = .5*x_res@cov_inv
-    log_probs = log_probs[:,None,:]@x_res[:,:,None]
-
-    return log_probs.view(-1,1)
-def train(xs,ys, num_epochs_INN,num_epochs_SNF,num_epochs_dsm, save_dir, log_dir, batch_size=1000):
-    snf = create_snf(4, 64, log_posterior, metr_steps_per_block=10, dimension=xdim, dimension_condition=ydim, noise_std=0.4)
-    diffusion_model = create_diffusion_model2(xdim=xdim, ydim=ydim, hidden_layers=[512, 512, 512])
-    INN = create_INN(4, 64, dimension=xdim, dimension_condition=ydim)
-    optimizer = Adam(snf.parameters(), lr=1e-4)
-
+def train(snf,diffusion_model,INN,forward_model,xs,ys, num_epochs_INN,num_epochs_SNF,num_epochs_dsm, save_dir, log_dir, batch_size=1000):
     logger = SummaryWriter(log_dir)
-
     loss_fn_diffusion = DSMLoss()
+    optimizer_snf = Adam(snf.parameters(), lr=1e-4)
     prog_bar = tqdm(total=num_epochs_SNF)
     for i in range(num_epochs_SNF):
-        data_loader = get_dataloader_noise(xs, ys,scale,batch_size)
-        loss = train_SNF_epoch(optimizer, snf, data_loader)
+        data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
+        loss = train_SNF_epoch(optimizer_snf, snf, data_loader)
         logger.add_scalar('Train/SNF-Loss', loss, i)
         prog_bar.set_description('SNF loss:{:.3f}'.format(loss))
         prog_bar.update()
@@ -62,8 +33,8 @@ def train(xs,ys, num_epochs_INN,num_epochs_SNF,num_epochs_dsm, save_dir, log_dir
     prog_bar = tqdm(total=num_epochs_dsm)
     t_min = torch.inf
     for i in range(num_epochs_dsm):
-        data_loader = get_dataloader_noise(xs, ys,scale,batch_size)
-        loss, logger_info, t = train_diffusion_epoch(optimizer_diffusion, loss_fn_diffusion, diffusion_model,
+        data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
+        loss, logger_info = diffusion_model.train_epoch(optimizer_diffusion, loss_fn_diffusion, diffusion_model,
                                                      data_loader, t_min)
         logger.add_scalar('Train/diffusion-Loss', loss, i)
         prog_bar.set_description('diffusion loss:{:.3f}'.format(loss))
@@ -73,7 +44,7 @@ def train(xs,ys, num_epochs_INN,num_epochs_SNF,num_epochs_dsm, save_dir, log_dir
     optimizer_inn = Adam(INN.parameters(), lr=1e-3)
     prog_bar = tqdm(total=num_epochs_INN)
     for i in range(num_epochs_INN):
-        data_loader = get_dataloader_noise(xs, ys,scale,batch_size)
+        data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
         loss = train_inn_epoch(optimizer_inn, INN, data_loader)
         logger.add_scalar('Train/INN-Loss', loss, i)
         prog_bar.set_description('INN loss:{:.3f}'.format(loss))
@@ -92,7 +63,7 @@ def train(xs,ys, num_epochs_INN,num_epochs_SNF,num_epochs_dsm, save_dir, log_dir
     return snf, diffusion_model, INN
 
 
-def evaluate(ys, snf, diffusion_model, INN, out_dir, n_samples_x=5000, n_repeats=10):
+def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=5000, n_repeats=10, epsilon = 1e-10, xlim = (-3.5,3.5),nbins = 75, figsize = (12,12), labelsize = 30):
     snf.eval()
     INN.eval()
     diffusion_model.eval()
@@ -108,8 +79,6 @@ def evaluate(ys, snf, diffusion_model, INN, out_dir, n_samples_x=5000, n_repeats
     kl2_vals = []
     kl3_vals = []
     mse_score_vals = []
-    nbins = 75
-    xlim = (-4,4)
 
     # hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
     plot_y = [3, 5, 22, 39, 51, 53, 60, 71, 81, 97]
@@ -127,20 +96,20 @@ def evaluate(ys, snf, diffusion_model, INN, out_dir, n_samples_x=5000, n_repeats
         nll_sum_inn = 0.
         mse_score_sum = 0
         inflated_ys = y[None, :].repeat(n_samples_x, 1)
-        posterior = get_posterior(y)
+        posterior = forward_model.get_posterior(y)
 
         for j in range(n_repeats):
-            x_pred_diffusion = get_grid(diffusion_model, y, xdim, ydim, num_samples=n_samples_x)
-            x_pred_snf = snf.forward(torch.randn(n_samples_x, xdim, device=device), inflated_ys)[
+            x_pred_diffusion = diffusion_model.get_grid(y, num_samples=n_samples_x)
+            x_pred_snf = snf(torch.randn(n_samples_x, forward_model.xdim, device=device), inflated_ys)[
                 0]
-            x_pred_inn = INN(torch.randn(n_samples_x, xdim, device=device), c=inflated_ys)[0]
+            x_pred_inn = INN(torch.randn(n_samples_x, forward_model.xdim, device=device), c=inflated_ys)[0]
             x_true = posterior.sample((n_samples_x,))
 
             # calculate MSE of score on test set
             t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
             g_0 = diffusion_model.base_sde.g(t0, x_true)
             score_predict = diffusion_model.a(x_true, t0.to(device), inflated_ys.to(device)) / g_0
-            score_true = score_posterior(x_true,inflated_ys)
+            score_true = forward_model.score_posterior(x_true,inflated_ys)
             mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
 
             # generate histograms
@@ -156,62 +125,38 @@ def evaluate(ys, snf, diffusion_model, INN, out_dir, n_samples_x=5000, n_repeats
             hist_diffusion_sum += hist_diffusion
             hist_inn_sum += hist_inn
 
-            # calculate negaitve log likelihood of the samples
+            # calculate negative log likelihood of the samples
             nll_sum_snf -= torch.mean(posterior.log_prob(x_pred_snf)) 
             nll_sum_true -= torch.mean(posterior.log_prob(x_true))
             nll_sum_diffusion -= torch.mean(posterior.log_prob(torch.from_numpy(x_pred_diffusion)))
             nll_sum_inn -= torch.mean(posterior.log_prob(x_pred_inn))
+            
         if i in plot_y:
-            # only plot samples of the last repeat otherwise it gets too much and plot only for some sandomly selected y
-            fig, ax = pairplot([x_pred_snf.detach().numpy()], limits=[xlim, xlim])
-            fname = os.path.join(out_dir, 'posterior-snf-%d.svg' % i)
-            plt.savefig(fname)
-            plt.close()
+            
+            utils.plot_density(x_true, nbins, limits=xlim, xticks=xlim, size=figsize,
+                               labelsize=labelsize,
+                               fname=os.path.join(out_dir, 'posterior-true-%d.svg' % i), show_mean=True)
 
-            fig, ax = pairplot([x_pred_snf.detach().numpy()])
-            fname = os.path.join(out_dir, 'posterior-snf-nolim-%d.svg' % i)
-            plt.savefig(fname)
-            plt.close()
+            utils.plot_density(x_pred_diffusion, nbins, limits=xlim, xticks=xlim, size=figsize,
+                               labelsize=labelsize,
+                               fname=os.path.join(out_dir, 'posterior-diffusion-%d.svg' % i), show_mean=True)
 
-            plot_density(x_pred_snf.detach().numpy(), nbins = nbins, limits = xlim, fname = os.path.join(out_dir,'posterior-snf-limits-own%d.svg'%i))
-            plot_density(x_pred_snf.detach().numpy(), nbins=nbins, fname=os.path.join(out_dir, 'posterior-snf-nolimits-own%d.svg' % i))
+            utils.plot_density(x_pred_snf, nbins, limits=xlim, xticks=xlim, size=figsize,
+                               labelsize=labelsize,
+                               fname=os.path.join(out_dir, 'posterior-snf-%d.svg' % i), show_mean=True)
 
-            fig, ax = pairplot([x_pred_diffusion], limits=[xlim, xlim])
-            fname = os.path.join(out_dir, 'posterior-dsm-%d.svg' % i)
-            plt.savefig(fname)
-            plt.close()
-
-            fig, ax = pairplot([x_pred_diffusion])
-            fname = os.path.join(out_dir, 'posterior-dsm-nolim-%d.svg' % i)
-            plt.savefig(fname)
-            plt.close()
-
-            plot_density(x_pred_diffusion, nbins=nbins, limits=xlim,
-                         fname=os.path.join(out_dir, 'posterior-dsm-limits-own%d.svg' % i))
-            plot_density(x_pred_diffusion, nbins=nbins, fname=os.path.join(out_dir, 'posterior-dsm-nolimits-own%d.svg' % i))
-
-            fig, ax = pairplot([x_pred_inn.detach().numpy()], limits=[xlim, xlim])
-            fname = os.path.join(out_dir, 'posterior-inn-%d.png' % i)
-            plt.savefig(fname)
-            plt.close()
-
-            fig, ax = pairplot([x_pred_inn.detach().numpy()])
-            fname = os.path.join(out_dir, 'posterior-inn-nolim-%d.svg' % i)
-            plt.savefig(fname)
-            plt.close()
-
-            plot_density(x_pred_inn.detach().numpy(), nbins=nbins, limits=xlim,
-                         fname=os.path.join(out_dir, 'posterior-inn-limits-own%d.svg' % i))
-            plot_density(x_pred_inn.detach().numpy(), nbins=nbins, fname=os.path.join(out_dir, 'posterior-inn-nolimits-own%d.svg' % i))
+            utils.plot_density(x_pred_inn, nbins, limits=xlim, xticks=xlim, size=figsize,
+                               labelsize=labelsize,
+                               fname=os.path.join(out_dir, 'posterior-inn-%d.svg' % i), show_mean=True)
 
         hist_true = hist_true_sum / hist_true_sum.sum()
         hist_snf = hist_snf_sum / hist_snf_sum.sum()
         hist_diffusion = hist_diffusion_sum / hist_diffusion_sum.sum()
         hist_inn = hist_inn_sum / hist_inn_sum.sum()
-        hist_true += reg
-        hist_snf += reg
-        hist_diffusion += reg
-        hist_inn += reg
+        hist_true += epsilon
+        hist_snf += epsilon
+        hist_diffusion += epsilon
+        hist_inn += epsilon
         hist_true /= hist_true.sum()
         hist_snf /= hist_snf.sum()
         hist_diffusion /= hist_diffusion.sum()
@@ -255,28 +200,35 @@ def evaluate(ys, snf, diffusion_model, INN, out_dir, n_samples_x=5000, n_repeats
 
 if __name__ =='__main__':
 
+    #parse arguments
+    parser = argparse.ArgumentParser(description="Load model parameters.")
+    parser.add_argument('--train_dir', required=True, type=str,
+                        help='Directory where checkpoints and logs are saved during training.')
+    parser.add_argument('--out_dir', required=True, type=str, help='Directory to save output results.')
+    parser.add_argument('--model', required=False, default='CDE', type=str, help='Which diffusion model to use. Can be either "CDE" or "CDiffE".')
+    parser.add_argument('--hidden_layers', required=False, default=[512,512,512], help='Number of hidden layers.')
+    parser.add_argument('--dataset_size', required=False, default=100000, type=int, help='Size of the Dataset.')
+    parser.add_argument('--n_epochs_dsm', required=False, default = 5000, type = int, help='Number epochs to train the dsm baseline')
+    parser.add_argument('--n_epochs_INN', required=False, default = 500, type = int, help='Number epochs to train the Normalizing Flow baseline')
+    parser.add_argument('--n_epochs_SNF', required=False, default = 100, type = int, help='Number epochs to train the Stochastic Normalizing Flow baseline')
+
+    args = parser.parse_args()
+    # load linear forward problem
+    f = LinearForwardProblem()
+    
     # create data
-    xs, ys = generate_dataset(n_samples=100000)
-    n_epochs_dsm = 5000
-    n_epochs_INN = 500
-    n_epochs_SNF = 100
+    xs, ys = generate_dataset_linear(f.xdim, f, args['dataset_size'])
     x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=.9, random_state=7)
-    reg = 1e-8
-    train_dir = 'examples/linearModel/results/baselines'
-    log_dir = os.path.join(train_dir, 'logs')
-    out_dir = os.path.join(train_dir, 'results')
 
-    if os.path.exists(log_dir):
-        shutil.rmtree(log_dir)
-        os.makedirs(log_dir)
-    else:
-        os.makedirs(log_dir)
+    log_dir = utils.set_directories(args)
 
-    if os.path.exists(out_dir):
-        shutil.rmtree(out_dir)
-        os.makedirs(out_dir)
-    else:
-        os.makedirs(out_dir)
+    snf = create_snf(4, 64, f.log_posterior, metr_steps_per_block=10, dimension=f.xdim, dimension_condition=f.ydim,
+                     noise_std=0.4)
+    if args['model'] == 'CDE':
+        diffusion_model = CDE(xdim=f.xdim, ydim=f.ydim, hidden_layers=args['hidden_layers'])
+    elif args['model'] == 'CDiffE':
+        diffusion_model = CDiffE(xdim=f.xdim, ydim=f.ydim, hidden_layers=args['hidden_layers'])
+    INN = create_INN(4, 64, dimension=f.xdim, dimension_condition=ydim)
 
     snf, diffusion_model, INN = train(x_train,y_train, n_epochs_INN, n_epochs_SNF, n_epochs_dsm, batch_size=1000, save_dir=train_dir, log_dir=log_dir)
     evaluate(y_test[:100],snf, diffusion_model, INN, out_dir, n_samples_x=30000)

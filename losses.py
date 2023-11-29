@@ -96,40 +96,18 @@ class ConditionalScoreFPELoss(nn.Module):
 
         return loss
 
-#Loss resulting from the HJB PDE. Only difference to the Score FPE is the minus sign of divergence term. Not icluded in the thesis.
-class ScoreHJBLoss(nn.Module):
-
-    def __init__(self):
-
-        super(ScoreHJBLoss,self).__init__()
-        self.name = 'HJBLoss'
-
-    def forward(self, s, x_t, t, beta, metric = 'L1'):
-        batch_size = x_t.shape[0]
-
-        ds_dt = batch_gradient(s,t)
-        divx_s = divergence(s,x_t)
-        grad_x = torch.autograd.grad(-divx_s + s ** 2 + (s[:,None,:]@x_t[:,:,None]).view(-1,1),
-                                   x_t,grad_outputs=torch.ones_like(s),retain_graph=True)[0]
-        if metric == 'L1':
-            loss = torch.mean(torch.abs(ds_dt - .5 * beta * grad_x), dim=1).view(batch_size, 1)
-        elif metric == 'L2':
-            loss = torch.sqrt(torch.sum((ds_dt-0.5*beta*grad_x)**2, dim = 1)).view(batch_size,1)
-        else:
-            loss = torch.mean((ds_dt - .5 * beta * grad_x) ** 2, dim=1).view(batch_size, 1)
-        return loss
-
-#Loss as used by Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." 
 class DSM_PDELoss(nn.Module):
 
-    def __init__(self, lam=1., pde_loss='HJB'):
+    """
+    Loss as used by Lai et al. (2023)
+    """
+
+    def __init__(self, lam=1., pde_loss='FPE'):
 
         super(DSM_PDELoss,self).__init__()
         self.lam = lam
         self.dsm_loss = DSMLoss()
-        if pde_loss == 'HJB':
-            self.pde_loss = ScoreHJBLoss()
-        elif pde_loss == 'FPE':
+        if pde_loss == 'FPE':
             self.pde_loss = ScoreFPELoss()
         else:
             self.pde_loss = ConditionalScoreFPELoss()
@@ -160,7 +138,7 @@ class PINNLoss(nn.Module):
             lam (float): A scaling factor for the PDE loss component. Default value is 1.0.
             lam2 (float): A scaling factor for the initial condition loss component. Default value is 1.0.
             initial_condition (callable): A function representing the initial condition to be used in the loss calculation.
-            pde_loss (str): A string specifying the type of PDE loss to be used. Options are 'HJB', 'FPE', and others defaulting to 'ScoreFPELoss'.
+            pde_loss (str): A string specifying the type of PDE loss to be used. Options are 'FPE' or 'cScoreFPE', defaulting to 'FPE'.
             ic_metric (str): A string specifying the metric used for the initial condition loss. Options are 'L1' and 'L2'.
             dsm_loss (DSMLoss): An instance of a DSMLoss class used to compute the data-driven component of the loss.
             name (str): A string representing the name of the loss class. Set to 'PINNLoss'.
@@ -170,7 +148,7 @@ class PINNLoss(nn.Module):
                 Computes the overall loss for the given input.
 
                 Parameters:
-                    model (nn.Module): The model for which the loss is being computed. An instance of the abstract class DiffusionModel().
+                    model (nn.Module): The model for which the loss is being computed. An instance of the BaseClassDiffusionModel.
                     x (torch.Tensor): The parameter tensor.
                     t (torch.Tensor): The temporal input tensor.
                     y (torch.Tensor): The measurement tensor.
@@ -190,9 +168,7 @@ class PINNLoss(nn.Module):
         self.lam = lam
         self.lam2 = lam2
         self.initial_condition = initial_condition
-        if pde_loss == 'HJB':
-            self.pde_loss = ScoreHJBLoss(**kwargs)
-        elif pde_loss == 'cScoreFPE':
+        if pde_loss == 'cScoreFPE':
             self.pde_loss = ConditionalScoreFPELoss(**kwargs)
         else:
             self.pde_loss = ScoreFPELoss(**kwargs)
@@ -231,18 +207,18 @@ class PINNLoss(nn.Module):
         return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM-Loss':dsm_loss.mean()}
 
 
-#similar to the PINNLoss but without the data-driven DSM-loss term.
 class PINNLoss2(nn.Module):
+    """
+    Ssimilar to the PINNLoss but without the data-driven DSM-loss term.
+    """
 
-    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'HJB'):
+    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'FPE'):
 
         super(PINNLoss2, self).__init__()
         self.lam = lam
         self.lam2 = lam2
         self.initial_condition = initial_condition
-        if pde_loss == 'HJB':
-            self.pde_loss = ScoreHJBLoss()
-        elif pde_loss == 'FPE':
+        if pde_loss == 'FPE':
             self.pde_loss = ScoreFPELoss()
         else:
             self.pde_loss = ConditionalScoreFPELoss()

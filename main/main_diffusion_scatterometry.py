@@ -5,7 +5,9 @@ from models.SNF import energy_grad
 from utils_scatterometry import *
 from datasets import generate_dataset_scatterometry,get_gt_samples_scatterometry,get_dataloader_scatterometry
 from losses import *
+import argparse
 import scipy
+import shutil
 import pandas as pd
 from tqdm import tqdm
 import os
@@ -64,7 +66,7 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
         mcmc_energy = lambda x: get_log_posterior(x, forward_model, a, b, inflated_ys, lambd_bd)
 
         for j in range(n_repeats):
-            x_pred = model.get_grid(y, num_samples=n_samples_x)
+            x_pred = model(y, num_samples=n_samples_x)
             x_true = get_gt_samples_scatterometry(gt_dir,i,j)
             x_true_tensor = torch.from_numpy(x_true).to(device)
 
@@ -131,35 +133,46 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
         
 if __name__ == '__main__':
 
-    src_dir = '../trained_models/scatterometry'
-    forward_model, forward_model_params = load_forward_model(src_dir)
+    # Define the required directory name
+    required_dir_name = 'main'
 
-    n_samples_y = 10
-    n_samples_x = 30000
-    n_epochs = 10
-    x_test,y_test = generate_dataset_scatterometry(forward_model,forward_model_params['a'],forward_model_params['b'],size=n_samples_y)
+    # Get the current working directory
+    current_path = os.getcwd()
 
-    score_posterior = lambda x,y: -energy_grad(x, lambda x:  get_log_posterior(x,forward_model,forward_model_params['a'],forward_model_params['b'],y,forward_model_params['lambd_bd']))[0]
+    # Check if 'main' is the last part of the current path
+    if not current_path.endswith(required_dir_name):
+        raise ValueError(
+            f"The script must be executed from the 'main' directory of the project, current path is '{current_path}'.")
+
+    surrogate_dir = '../trained_models/scatterometry'
+    gt_dir = '../data/gt_samples_scatterometry'
+
+    # Create the parser
+    parser = argparse.ArgumentParser(description="Load model parameters.")
+    args = utils.parse_args(parser)
+
+    # load the forward model
+    forward_model, forward_model_params = load_forward_model(surrogate_dir)
+
+
+
+    #generate test set
+    x_test,y_test = generate_dataset_scatterometry(forward_model,forward_model_params['a'],forward_model_params['b'],size=args['n_samples_y'])
+
+    # define the score of the posterior and score of the latent distribution
+    score_posterior = lambda x, y: -energy_grad(x,
+                                                lambda x: get_log_posterior(x, forward_model, forward_model_params['a'],
+                                                                            forward_model_params['b'], y,
+                                                                            forward_model_params['lambd_bd']))[0]
     score_prior = lambda x: -x
 
+    model,loss_fn = utils.get_model_args(args, forward_model_params,score_posterior,forward_model)
 
-    hidden_layers = [256,256]
-    model = PosteriorDiffusionEstimator(forward_model_params['xdim'],forward_model_params['ydim'],hidden_layers)
     optimizer = Adam(model.sde.a.parameters(), lr=1e-4)
 
-    loss_fn = model.loss_fn(forward_model,forward_model_params['a'],forward_model_params['b'], lam=0.001)
-    #loss_fn = PINNLoss(score_posterior, lam = 1., lam2 = .001, pde_loss = 'FPE',ic_metric = 'L2', metric = 'L2')
-    #loss_fn = ErmonLoss(lam=1., pde_loss ='FPE')
-    train_dir = 'test'
-    gt_dir = '../data/gt_samples/'
-    log_dir = os.path.join(train_dir, 'logs')
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    out_dir = os.path.join(train_dir, 'results')
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
+    log_dir = utils.set_directories(args)
 
     print('---------------------')
-    model = train(model, optimizer, loss_fn, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], n_epochs, batch_size=1000,save_dir=train_dir, log_dir = log_dir)
+    model = train(model, optimizer, loss_fn, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args['n_epochs'], batch_size=1000,save_dir=args['train_dir'], log_dir = log_dir)
     print('----------------------')
-    evaluate(model, y_test, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], out_dir, gt_dir, n_samples_x=n_samples_x)
+    evaluate(model, y_test, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args['out_dir'], gt_dir, n_samples_x=args['n_samples_x'])

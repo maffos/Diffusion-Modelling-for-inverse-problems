@@ -4,7 +4,7 @@ import os
 import shutil
 import utils
 from models.diffusion import *
-from datasets import get_dataloader_forward,generate_dataset_forward
+from datasets import get_dataloader_linear,generate_dataset_linear
 from losses import *
 from linear_problem import LinearForwardProblem
 from sklearn.model_selection import train_test_split
@@ -15,6 +15,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 import scipy
+import argparse
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -56,7 +57,7 @@ def train(model,xs,ys, optim, loss_fn, forward_model,save_dir, log_dir, num_epoc
     prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
 
-        epoch_data_loader = get_dataloader_forward(xs, ys,forward_model.scale,batch_size)
+        epoch_data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
         #train_loader = get_dataloader_dsm(scale,batch_size,200,100,5)
 
         """
@@ -126,7 +127,8 @@ def train(model,xs,ys, optim, loss_fn, forward_model,save_dir, log_dir, num_epoc
     torch.save(model.sde.a.state_dict(), current_model_path)
     return model
 
-def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10):
+def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10, xlim = (-3.5,3.5),nbins = 75, figsize = (12,12), labelsize = 30):
+
     n_samples_y = ys.shape[0]
     model.sde.eval()
     with (torch.no_grad()):
@@ -135,7 +137,6 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
         kl2_sum = 0.
         mse_score_vals = []
         kl2_vals = []
-        nbins = 200
         # hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
         plot_ys = [3,5,22,39,51,53,60,71,81,97]
 
@@ -150,7 +151,7 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
             posterior = forward_model.get_posterior(y)
 
             for _ in range(n_repeats):
-                x_pred = model.get_grid(y, num_samples=n_samples_x)
+                x_pred = model(y, num_samples=n_samples_x)
                 x_true = posterior.sample((n_samples_x,))
 
                 # calculate MSE of score on test set
@@ -163,30 +164,27 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
 
                 # generate histograms
                 hist_true, _ = np.histogramdd(x_true, bins=(nbins, nbins),
-                                              range=((-2, 2), (-2, 2)))
+                                              range=(xlim, xlim))
                 hist_diffusion, _ = np.histogramdd(x_pred, bins=(nbins, nbins),
-                                                   range=((-2, 2), (-2, 2)))
+                                                   range=(xlim, xlim))
 
                 hist_true_sum += hist_true
                 hist_diffusion_sum += hist_diffusion
 
-                # calculate negaitve log likelihood of the samples
+                # calculate negative log likelihood of the samples
                 nll_sum_true -= torch.mean(posterior.log_prob(x_true))
                 nll_sum_diffusion -= torch.mean(posterior.log_prob(torch.from_numpy(x_pred)))
 
             # only plot samples of the last repeat otherwise it gets too much and plot only for some fixed y
             if i in plot_ys:
-                fig, ax = conditional_pairplot(posterior, condition=y, limits=[[-2, 2], [-2, 2]])
-                fig.suptitle('Posterior at y=(%.2f,%.2f)' % (y[0], y[1]))
-                fname = os.path.join(out_dir, 'posterior-true%d.png' % i)
-                plt.savefig(fname)
-                plt.close()
 
-                fig, ax = pairplot([x_pred], limits = [[-2,2],[-2,2]])
-                fig.suptitle('PINN-Loss')
-                fname = os.path.join(out_dir, 'posterior-pinn-%d.png' % i)
-                plt.savefig(fname)
-                plt.close()
+                utils.plot_density(x_true, nbins, limits=xlim, xticks=xlim, size=figsize,
+                                   labelsize=labelsize,
+                                   fname=os.path.join(out_dir, 'posterior-true-%d.svg' % i), show_mean = True)
+
+                utils.plot_density(x_pred, nbins, limits=xlim, xticks=xlim, size=figsize,
+                                   labelsize=labelsize,
+                                   fname=os.path.join(out_dir, 'posterior-diffusion-%d.svg' % i), show_mean = True)
 
             hist_true = hist_true_sum / hist_true_sum.sum()
             hist_diffusion = hist_diffusion_sum / hist_diffusion_sum.sum()
@@ -218,53 +216,28 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
 
 if __name__ == '__main__':
 
+    # Create the parser
+    parser = argparse.ArgumentParser(description="Load model parameters.")
+    parser.add_argument('--dataset_size', required=False, default=100000, type=int, help='Size of the Dataset.')
+    args = utils.parse_args(parser)
+
     #load linear forward problem
     f = LinearForwardProblem()
 
     #create data
-    n_samples = 100000
-    xs,ys = generate_dataset_forward(f.xdim, f, n_samples)
+    xs,ys = generate_dataset_linear(f.xdim, f, args['dataset_size'])
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.9, random_state = 7)
 
-    #define model parameters
-    src_dir = '../results/test'
-    hidden_layers = [512,512,512]
+    model,loss_fn = utils.get_model_args(args, vars(f),f.score_posterior,f)
+
     resume_training = False
-    pde_loss = 'FPE'
-    lam = .1
-    lam2 = 1.
-    lr = 1e-4
-    metric = 'L1'
-
-    #define models
-    model = CDE(f.xdim,f.ydim, hidden_layers=hidden_layers)
-    #loss_fn =PINNLoss2(initial_condition=score_posterior, boundary_condition=lambda x: -x, pde_loss=pde_loss, lam=lam)
-    #loss_fn = PINNLoss4(initial_condition=score_posterior, lam=lam,lam2=lam2, pde_loss = pde_loss, metric = metric)
-    loss_fn = DSMLoss()
-    #loss_fn = ScoreFlowMatchingLoss(lam=.1)
-    #loss_fn = PINNLoss3(initial_condition = score_posterior, lam = .1, lam2 = 1)
-    #loss_fn = ErmonLoss(lam=0.1, pde_loss = 'FPE')
-    optimizer = Adam(model.sde.a.parameters(), lr = lr)
-
-    train_dir = os.path.join(src_dir,loss_fn.name)
     if resume_training:
-        model.a.load_state_dict(torch.load(os.path.join(train_dir,'current_model.pt'),map_location=torch.device(device)))
-        out_dir = os.path.join(train_dir, 'results_resume')
-    else:
-        out_dir = os.path.join(train_dir, 'results')
+        model.sde.a.load_state_dict(
+            torch.load(os.path.join(args['train_dir'], 'current_model.pt'), map_location=torch.device(device)))
 
-    if os.path.exists(out_dir) and not resume_training:
-        shutil.rmtree(out_dir)
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
+    log_dir = utils.set_directories(args, resume_training)
 
-    log_dir = os.path.join(train_dir, 'logs')
+    optimizer = Adam(model.sde.a.parameters(), lr=1e-4)
 
-    if os.path.exists(log_dir) and not resume_training:
-        shutil.rmtree(log_dir)
-
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-
-    model = train(model,x_train,y_train, optimizer, loss_fn, f, train_dir, log_dir, num_epochs=5, resume_training = resume_training)
-    evaluate(model, y_test[:100], f, out_dir, n_samples_x = 30000, n_repeats = 10)
+    model = train(model,x_train,y_train, optimizer, loss_fn, f, args['train_dir'], log_dir, num_epochs=args['n_epochs'], resume_training = resume_training)
+    evaluate(model, y_test[:args['n_samples_y']], f, args['out_dir'], n_samples_x = args['n_samples_x'], n_repeats = 10)

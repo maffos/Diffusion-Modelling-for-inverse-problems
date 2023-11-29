@@ -1,4 +1,6 @@
 import matplotlib.pyplot as plt
+from models.diffusion import *
+from losses import *
 import seaborn as sns
 import numpy as np
 import pandas as pd
@@ -6,6 +8,7 @@ import scipy
 import scipy.stats as st
 import torch.utils.data
 import os
+import shutil
 import itertools
 import torch
 from torch import nn
@@ -55,7 +58,81 @@ def div_estimator(s,x,num_samples=1, rademacher = True):
     div /= num_samples
     return div
 
-def plot_density(samples, nbins, size, labelsize = 12, show = False, cmap = 'viridis', limits=None, fname = None,xticks = None, show_mode = False):
+def get_model_args(args, forward_model_params, score_posterior, forward_model):
+    if args['model'] == 'CDE':
+        model = CDE(forward_model_params['xdim'],forward_model_params['ydim'],args['hidden_layers'])
+    elif args['model'] == 'CDiffE':
+        model = CDiffE(forward_model_params['xdim'],forward_model_params['ydim'],args['hidden_layers'])
+    elif args['model'] == 'Posterior':
+        model = PosteriorDiffusionEstimator(forward_model_params['xdim'],forward_model_params['ydim'],args['hidden_layers'])
+    else:
+        raise ValueError('No valid value for "model" passed. Has to be one of "CDE", "CDiffE" or "Posterior".')
+
+    if args['loss_fn'] == 'PINNLoss':
+        loss_fn = PINNLoss(score_posterior, lam = args['lam'], lam2 = args['lam2'], pde_loss = 'FPE',
+                           ic_metric = args['ic_metric'], metric = args['pde_metric'])
+    elif args['loss_fn'] == 'PINNLoss2':
+        loss_fn = PINNLoss2(score_posterior, lam=args['lam'], pde_loss='FPE', metric=args['pde_metric'])
+    elif args['loss_fn'] == 'DSM_PDE':
+        loss_fn = DSM_PDELoss(score_posterior)
+    elif args['loss_fn'] == 'DSM':
+        loss_fn = DSMLoss()
+    elif args['model'] == 'Posterior':
+        loss_fn = model.loss_fn(forward_model,forward_model_params['a'],forward_model_params['b'], lam=args['lam'])
+    else:
+        raise ValueError('No valid loss_fn was specified. Options are: "PINNLoss","PINNLoss2","DSM" or "DSM_PDE".'
+                         'When the model is PosteriorDiffusionEstimator, the PosteriorLoss is used as default.')
+    return model,loss_fn
+
+def set_directories(args,resume_training = False):
+
+    if os.path.exists(args['out_dir']) and not resume_training:
+        shutil.rmtree(args['out_dir'])
+    if not os.path.exists(args['out_dir']):
+        os.makedirs(args['out_dir'])
+
+    log_dir = os.path.join(args['train_dir'], 'logs')
+
+    if os.path.exists(log_dir) and not resume_training:
+        shutil.rmtree(log_dir)
+
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    return log_dir
+
+def parse_args(parser):
+    # Add arguments
+    parser.add_argument('--train_dir', required=True, type=str,
+                        help='Directory where checkpoints and logs are saved during training.')
+    parser.add_argument('--out_dir', required=True, type=str, help='Directory to save output results.')
+    parser.add_argument('--model', required=False, type=str, default='CDE',
+                        help='Type of model to be used. Currently supported are "CDE","CDiffE" and "Posterior"')
+    parser.add_argument('--loss_fn', required=False, type=str, default='PINNLoss',
+                        help='Loss function to use for training. Valid options are "PINNLoss", "PINNLoss2", "DSM" and "DSM_PDE".')
+    parser.add_argument('--pde_loss', required=False, default='FPE', type=str,
+                        help='Loss enforcing the underlying PDE of the score. Can be either "FPE" or "cScoreFPE.')
+    parser.add_argument('--hidden_layers', required=False, default=[512, 512, 512],
+                        help='Number of hidden layers in the Neural Net.')
+    parser.add_argument('--lam', required=False, default=0.001, type=float,
+                        help='Regularization parameter lambda controlling the PDE term.')
+    parser.add_argument('--lam2', required=False, default=0.01, type=float,
+                        help='Second regularization parameter lambda controlling the initial condition term.')
+    parser.add_argument('--pde_metric', required=False, default='L1',
+                        help='Regularization metric to use for the pde term. Either "L1" or "L2".')
+    parser.add_argument('--ic_metric', required=False, default='L2',
+                        help='Regularization metric to use for the initial condition. Either "L1" or "L2".')
+    parser.add_argument('--n_samples_y', required=False, default=100, type=int,
+                        help='Number of measurements for model evaluation.')
+    parser.add_argument('--n_samples_x', required=False, default=30000, type=int,
+                        help='Number of X samples per measurement for model evaluation.')
+    parser.add_argument('--n_epochs', required=False, default=20000, type=int, help='Number of training epochs.')
+
+    # Parse the arguments
+    args = parser.parse_args()
+
+    return args
+def plot_density(samples, nbins, size, labelsize = 12, show = False, cmap = 'viridis', limits=None, fname = None,xticks = None, show_mean = False):
     """
     Plot the density of the samples in a grid.
     Parameters:
@@ -83,7 +160,7 @@ def plot_density(samples, nbins, size, labelsize = 12, show = False, cmap = 'vir
                 axes[i, j].set_xlabel('dim%d' % i, size=labelsize)
 
                 # Draw a dashed line at the mode
-                if show_mode:
+                if show_mean:
                     # Find the mode (bin with maximum count)
                     mode_index = np.argmax(hist)
                     mode_value = (edges[mode_index] + edges[mode_index + 1]) / 2
@@ -102,10 +179,10 @@ def plot_density(samples, nbins, size, labelsize = 12, show = False, cmap = 'vir
                     x_max = .5*(edges[-2]+edges[-1])
                     if x_max < 0:
                         xticks = [x_min, x_max]
-                    elif not show_mode:
+                    elif not show_mean:
                         xticks = [x_min, 0, x_max]
                     axes[i, j].set_xticks(xticks)
-                if show_mode:
+                if show_mean:
                     xticks = [xticks[0], weighted_mean, xticks[-1]]
                     xticklabels = [xticks[0], np.round(weighted_mean,1), xticks[-1]]
                 else:

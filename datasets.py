@@ -36,14 +36,14 @@ def get_dataloader_scatterometry(batch_size, forward_model,a, b,lambd_bd):
     return epoch_data_loader
 
 
-def generate_dataset_forward(xdim, f, n_samples, random_state=7):
+def generate_dataset_linear(xdim, f, n_samples, random_state=7):
     random_gen = torch.random.manual_seed(random_state)
     x = torch.randn(n_samples, xdim, generator=random_gen).to(device)
     y = f(x)
     return x, y
 
 
-def get_dataloader_forward(x_train, y_train, sigma, batch_size):
+def get_dataloader_linear(x_train, y_train, sigma, batch_size):
     perm = torch.randperm(len(x_train))
     x = x_train[perm]
     y = y_train[perm]

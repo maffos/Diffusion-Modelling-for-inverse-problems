@@ -24,6 +24,7 @@ class LinearForwardProblem():
     def __call__(self, *args, **kwargs):
         return self.forward(args[0])
 
+    """
     def get_params(self):
         # define parameters of the inverse problem
         epsilon = 1e-6
@@ -40,6 +41,7 @@ class LinearForwardProblem():
         mu = torch.zeros(xdim)
 
         return epsilon,xdim,ydim,A,b,scale,Sigma,Lam,Sigma_inv,Sigma_y_inv,mu
+    """
 
     #affine function as forward problem
     def forward(self,x):
@@ -62,6 +64,15 @@ class LinearForwardProblem():
         cov = self.Lam-self.Lam@self.A.T@self.Sigma_y_inv@self.A@self.Lam
 
         return MultivariateNormal(mean.to(device),cov.to(device))
+
+    def log_posterior(self,xs, ys):
+        y_res = ys - (self.A @ self.mu + self.b)
+        mean = y_res @ (self.A.T @ self.Sigma_y_inv)
+        x_res = xs - mean
+        log_probs = .5 * x_res @ self.cov_inv
+        log_probs = log_probs[:, None, :] @ x_res[:, :, None]
+
+        return log_probs.view(-1, 1)
 
     #analytical score of the posterior
     def score_posterior(self,x,y):

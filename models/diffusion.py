@@ -17,7 +17,10 @@ class BaseClassDiffusionModel():
         #abstract attributes that need to be overriden
         self.sde = None
 
-    def get_grid(self, y, num_samples=2000, num_steps=200,
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args,**kwargs)
+
+    def forward(self, y, num_samples=2000, num_steps=200,
                      mean=0, std=1):
         inflated_ys = torch.zeros(num_samples, self.ydim).to(y.device)
         inflated_ys += y
