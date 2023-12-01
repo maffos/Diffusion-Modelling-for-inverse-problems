@@ -51,14 +51,14 @@ def get_dataloader_dsm(scale,batch_size, nx,ny,nt):
     
 """
 
-def train(model,xs,ys, optim, loss_fn, forward_model,save_dir, log_dir, num_epochs, batch_size=1000, resume_training = False):
+def train(model,optim, loss_fn, forward_model_params,save_dir, log_dir, num_epochs, batch_size, xs, ys, resume_training = False):
 
     model.sde.train()
     logger = SummaryWriter(log_dir)
     prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
 
-        epoch_data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
+        epoch_data_loader = get_dataloader_linear(xs, ys,forward_model_params['scale'],batch_size)
         #train_loader = get_dataloader_dsm(scale,batch_size,200,100,5)
 
         """
@@ -210,10 +210,12 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
         kl2_var = np.sum((kl2_vals - kl2_sum / n_samples_y) ** 2) / n_samples_y
         nll_true = np.array(nll_true)
         nll_diffusion = np.array(nll_diffusion)
+        nlpd = np.abs(nll_true-nll_diffusion)
         df = pd.DataFrame(
             {'KL2': kl2_vals, 'NLL_true': nll_true, 'NLL_diffusion': nll_diffusion, 'MSE': np.array(mse_score_vals)})
         df.to_csv(os.path.join(out_dir, 'results.csv'))
         print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
+        return kl2_vals.mean(),nlpd.mean(),mse_score_vals.mean()
 
 if __name__ == '__main__':
 
@@ -236,7 +238,7 @@ if __name__ == '__main__':
     xs,ys = generate_dataset_linear(f.xdim, f, config['dataset_size'])
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=config['train_size'], random_state = config['random_state'])
 
-    model,loss_fn = utils.get_model_from_args(args, vars(f),f.score_posterior,f, config)
+    model,loss_fn = utils.get_model_from_args(vars(args), vars(f),f.score_posterior,f, config)
 
     if config['resume_training']:
         model.sde.a.load_state_dict(
@@ -246,5 +248,5 @@ if __name__ == '__main__':
 
     optimizer = Adam(model.sde.a.parameters(), lr=config['lr'])
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, f, args.train_dir, log_dir, num_epochs=config['n_epochs'], resume_training = config['resume_training'])
-    evaluate(model, y_test[:config['n_samples_y']], f, args.out_dir, n_samples_x = config['n_samples_x'], n_repeats = 2)
+    model = train(model,x_train,y_train, optimizer, loss_fn, vars(f), args.train_dir, log_dir, num_epochs=config['n_epochs'], resume_training = config['resume_training'])
+    _ = evaluate(model, y_test[:config['n_samples_y']], f, args.out_dir, n_samples_x = config['n_samples_x'], n_repeats = 2)

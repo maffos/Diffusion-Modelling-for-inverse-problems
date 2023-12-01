@@ -18,12 +18,12 @@ from torch.utils.tensorboard import SummaryWriter
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, batch_size, save_dir, log_dir):
+def train(model, optimizer, loss_fn, forward_model_params, save_dir, log_dir, num_epochs,batch_size, forward_model):
 
     logger = SummaryWriter(log_dir)
     prog_bar = tqdm(total=num_epochs)
     for i in range(num_epochs):
-        data_loader = get_dataloader_scatterometry(batch_size, forward_model, a, b, lambd_bd)
+        data_loader = get_dataloader_scatterometry(batch_size, forward_model, forward_model_params['a'], forward_model_params['b'], forward_model_params['lambd_bd'])
         loss,logger_info = model.train_epoch(optimizer, loss_fn, data_loader)
         prog_bar.set_description('diffusion loss:{:.3f}'.format(loss))
         logger.add_scalar('Train/Loss', loss, i)
@@ -39,7 +39,7 @@ def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, ba
 
     return model
 
-def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10,xlim = (-1.2,1.2),nbins = 75, figsize = (12,12), labelsize = 30):
+def evaluate(model,ys,forward_model, out_dir, a,b,lambd_bd, gt_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10,xlim = (-1.2,1.2),nbins = 75, figsize = (12,12), labelsize = 30):
     n_samples_y = ys.shape[0]
     model.sde.eval()
     nll_diffusion = []
@@ -122,10 +122,13 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
     kl2_var = np.sum((kl2_vals - kl2_sum / n_samples_y) ** 2) / n_samples_y
     nll_mcmc = np.array(nll_mcmc)
     nll_diffusion = np.array(nll_diffusion)
+    nlpd = np.abs(nll_diffusion-nll_mcmc)
     df = pd.DataFrame(
         {'KL2': kl2_vals, 'KL_reverse':kl2_reverse_vals, 'NLL_mcmc': nll_mcmc,'NLL_diffusion': nll_diffusion,'MSE':np.array(mse_score_vals)})
     df.to_csv(os.path.join(out_dir, 'results.csv'))
     print('KL2:', kl2_sum / n_samples_y, '+-', kl2_var)
+
+    return kl2_vals.mean(),nlpd.mean(),mse_score_vals.mean()
         
 if __name__ == '__main__':
 
@@ -148,7 +151,7 @@ if __name__ == '__main__':
     forward_model, forward_model_params = load_forward_model(surrogate_dir)
 
     #generate test set
-    x_test,y_test = generate_dataset_scatterometry(forward_model,forward_model_params['a'],forward_model_params['b'],size=config['n_samples_y'])
+    x_test, y_test = generate_dataset_scatterometry(forward_model,forward_model_params['a'],forward_model_params['b'],size=config['n_samples_y'])
 #    x_test, y_test = generate_dataset_scatterometry(forward_model, forward_model_params.a, forward_model_params.b,
                                                     #size=args.n_samples_y)
 
@@ -158,11 +161,11 @@ if __name__ == '__main__':
                                                                             forward_model_params['b'], y,
                                                                             forward_model_params['lambd_bd']))[0]
 
-    model,loss_fn = utils.get_model_from_args(args, forward_model_params,score_posterior,forward_model, config)
+    model,loss_fn = utils.get_model_from_args(vars(args), forward_model_params,score_posterior,forward_model, config)
     optimizer = Adam(model.sde.a.parameters(), lr=1e-4)
     log_dir = utils.set_directories(args)
 
     print('---------------------')
-    model = train(model, optimizer, loss_fn, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], config['n_epochs'], batch_size=config['batch_size'],save_dir=args.train_dir, log_dir = log_dir)
+    model = train(model, optimizer, loss_fn, forward_model_params, args.save_dir, log_dir, config['num_epochs'],config['batch_size'], forward_model)
     print('----------------------')
-    evaluate(model, y_test, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args.out_dir, gt_dir, n_samples_x=config['n_samples_x'], n_repeats = 2)
+    _ = evaluate(model, y_test, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args.out_dir, gt_dir, n_samples_x=config['n_samples_x'], n_repeats = 2)

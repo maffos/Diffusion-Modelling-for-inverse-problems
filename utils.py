@@ -22,47 +22,43 @@ def product_dict(**kwargs):
         yield dict(zip(keys, instance))
 
 
-def get_model_from_args(args, forward_model_params, score_posterior, forward_model, config):
-    if args.model == 'CDE':
+def get_model_from_args(args, forward_model_params, score_posterior, forward_model, config = None):
+
+    if config is None:
+        config = args
+    if args['model'] == 'CDE':
         model = CDE(forward_model_params['xdim'],forward_model_params['ydim'],config['hidden_layers'])
-    elif args.model == 'CDiffE':
+    elif args['model'] == 'CDiffE':
         model = CDiffE(forward_model_params['xdim'],forward_model_params['ydim'],config['hidden_layers'])
-    elif args.model == 'Posterior':
+    elif args['model'] == 'Posterior':
         model = PosteriorDiffusionEstimator(forward_model_params['xdim'],forward_model_params['ydim'],config['hidden_layers'])
     else:
         raise ValueError('No valid value for "model" passed. Has to be one of "CDE", "CDiffE" or "Posterior".')
 
-    if args.loss_fn == 'PINNLoss':
-        loss_fn = PINNLoss(score_posterior, lam = args.lam, lam2 = args.lam2, pde_loss = args.pde_loss,
-                           ic_metric = args.ic_metric, metric = args.pde_metric)
-    elif args.loss_fn == 'PINNLoss2':
-        loss_fn = PINNLoss2(score_posterior, lam=args.lam, pde_loss=args.pde_loss, metric=args.pde_metric)
-    elif args.loss_fn == 'DSM_PDE':
+    if args['loss_fn'] == 'PINNLoss':
+        loss_fn = PINNLoss(score_posterior, lam = args['lam'], lam2 = args['lam2'], pde_loss = args['pde_loss'],
+                           ic_metric = args['ic_metric'], metric = args['pde_metric'])
+    elif args['loss_fn'] == 'PINNLoss2':
+        loss_fn = PINNLoss2(score_posterior, lam=args['lam'], pde_loss=args['pde_loss'], metric=args['pde_metric'])
+    elif args['loss_fn'] == 'DSM_PDE':
         loss_fn = DSM_PDELoss(score_posterior)
-    elif args.loss_fn == 'DSM':
+    elif args['loss_fn'] == 'DSM':
         loss_fn = DSMLoss()
-    elif args.model == 'Posterior':
-        loss_fn = model.loss_fn(forward_model,forward_model_params['a'],forward_model_params['b'], lam=args.lam)
+    elif args['model'] == 'Posterior':
+        loss_fn = model.loss_fn(forward_model,forward_model_params['a'],forward_model_params['b'], lam=args['lam'])
     else:
         raise ValueError('No valid loss_fn was specified. Options are: "PINNLoss","PINNLoss2","DSM" or "DSM_PDE".'
                          'When the model is PosteriorDiffusionEstimator, the PosteriorLoss is used as default.')
     return model,loss_fn
 
-def set_directories(args,resume_training = False):
+def set_directories(train_dir, out_dir,resume_training = False):
 
-    try:
-        if os.path.exists(args.out_dir) and not resume_training:
-            shutil.rmtree(args.out_dir)
-        if not os.path.exists(args.out_dir):
-            os.makedirs(args.out_dir)
+    if os.path.exists(out_dir) and not resume_training:
+        shutil.rmtree(out_dir)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
 
-        log_dir = os.path.join(args.train_dir, 'logs')
-    except AttributeError:
-        if os.path.exists(args['out_dir']) and not resume_training:
-            shutil.rmtree(args['out_dir'])
-        if not os.path.exists(args['out_dir']):
-            os.makedirs(args['out_dir'])
-        log_dir = os.path.join(args['train_dir'], 'logs')
+    log_dir = os.path.join(train_dir, 'logs')
 
     if os.path.exists(log_dir) and not resume_training:
         shutil.rmtree(log_dir)
