@@ -1,4 +1,4 @@
-import losses
+from losses import PosteriorLoss
 from include.sdeflow_light.lib import sdes
 from nets import MLP, MLP2, PosteriorScore
 from overrides import override
@@ -152,7 +152,7 @@ class CDiffE(BaseClassDiffusionModel):
         return mean_loss, logger_info
 
     @override
-    def get_grid(self, y, num_samples=2000, num_steps=200,
+    def forward(self, y, num_samples=2000, num_steps=200,
                      mean=0, std=1):
         inflated_ys = torch.zeros(num_samples, self.ydim).to(y.device)
         inflated_ys += y
@@ -195,7 +195,7 @@ class PosteriorDiffusionEstimator(BaseClassDiffusionModel):
         likelihood_net = MLP(**likelihood_net_params).to(device)
         score_net = PosteriorScore(prior_net, likelihood_net, forward_process)
         self.sde = sdes.PluginReverseSDE(forward_process, score_net, T=1, debias=True)
-        self.loss_fn = losses.PosteriorLoss
+        self.loss_fn = PosteriorLoss
 
     def train_epoch(self, optimizer, loss_fn, epoch_data_loader):
         mean_loss = 0

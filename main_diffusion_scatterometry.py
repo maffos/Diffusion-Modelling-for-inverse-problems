@@ -3,10 +3,11 @@ import utils
 from models.diffusion import *
 from models.SNF import energy_grad
 from utils_scatterometry import *
-from datasets import generate_dataset_scatterometry,get_gt_samples_scatterometry,get_dataloader_scatterometry
+from datasets import (generate_dataset_scatterometry,get_gt_samples_scatterometry,get_dataloader_scatterometry)
 from losses import *
 import argparse
 import scipy
+import yaml
 import shutil
 import pandas as pd
 from tqdm import tqdm
@@ -16,11 +17,6 @@ from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-# mcmc parameters for "discovering" the ground truth
-NOISE_STD_MCMC = 0.5
-METR_STEPS = 1000
-RANDOM_STATE = 13
 
 def train(model, optimizer, loss_fn, forward_model, a,b,lambd_bd, num_epochs, batch_size, save_dir, log_dir):
 
@@ -95,10 +91,10 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
         # only plot samples of the last repeat otherwise it gets too much and plot only for some selected y
         if i in plot_y:
 
-            utils.plot_density(x_true, nbins, limits=(-1.2, 1.2), xticks=[-1, 0, 1], size=figsize, labelsize=labelsize,
+            utils.plot_density(x_true, nbins, limits=xlim, xticks=[-1, 0, 1], size=figsize, labelsize=labelsize,
                          fname=os.path.join(out_dir, 'posterior-mcmc-%d.svg'%i))
 
-            utils.plot_density(x_pred, nbins, limits=(-1.2, 1.2), xticks=[-1, 0, 1], size=figsize, labelsize=labelsize,
+            utils.plot_density(x_pred, nbins, limits=xlim, xticks=[-1, 0, 1], size=figsize, labelsize=labelsize,
                      fname=os.path.join(out_dir, 'posterior-diffusion-%d.svg' % i))
 
 
@@ -134,45 +130,39 @@ def evaluate(model,ys,forward_model, a,b,lambd_bd, out_dir, gt_dir, n_samples_x=
 if __name__ == '__main__':
 
     # Define the required directory name
-    required_dir_name = 'main'
-
-    # Get the current working directory
-    current_path = os.getcwd()
-
-    # Check if 'main' is the last part of the current path
-    if not current_path.endswith(required_dir_name):
-        raise ValueError(
-            f"The script must be executed from the 'main' directory of the project, current path is '{current_path}'.")
-
-    surrogate_dir = '../trained_models/scatterometry'
-    gt_dir = '../data/gt_samples_scatterometry'
+    #required_dir_name = 'main'
+    #utils.check_wd(required_dir_name)
 
     # Create the parser
     parser = argparse.ArgumentParser(description="Load model parameters.")
-    args = utils.parse_args(parser)
+    args = utils.diffusion_parser(parser)
+
+    config_dir = 'config/'
+    surrogate_dir = 'trained_models/scatterometry'
+    gt_dir = 'data/gt_samples_scatterometry'
+
+    # load config params
+    config = yaml.safe_load(open(os.path.join(config_dir, "config_scatterometry.yml")))
 
     # load the forward model
     forward_model, forward_model_params = load_forward_model(surrogate_dir)
 
-
-
     #generate test set
-    x_test,y_test = generate_dataset_scatterometry(forward_model,forward_model_params['a'],forward_model_params['b'],size=args['n_samples_y'])
+    x_test,y_test = generate_dataset_scatterometry(forward_model,forward_model_params['a'],forward_model_params['b'],size=config['n_samples_y'])
+#    x_test, y_test = generate_dataset_scatterometry(forward_model, forward_model_params.a, forward_model_params.b,
+                                                    #size=args.n_samples_y)
 
-    # define the score of the posterior and score of the latent distribution
+    # define the score of the posterior
     score_posterior = lambda x, y: -energy_grad(x,
                                                 lambda x: get_log_posterior(x, forward_model, forward_model_params['a'],
                                                                             forward_model_params['b'], y,
                                                                             forward_model_params['lambd_bd']))[0]
-    score_prior = lambda x: -x
 
-    model,loss_fn = utils.get_model_args(args, forward_model_params,score_posterior,forward_model)
-
+    model,loss_fn = utils.get_model_from_args(args, forward_model_params,score_posterior,forward_model, config)
     optimizer = Adam(model.sde.a.parameters(), lr=1e-4)
-
     log_dir = utils.set_directories(args)
 
     print('---------------------')
-    model = train(model, optimizer, loss_fn, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args['n_epochs'], batch_size=1000,save_dir=args['train_dir'], log_dir = log_dir)
+    model = train(model, optimizer, loss_fn, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], config['n_epochs'], batch_size=config['batch_size'],save_dir=args.train_dir, log_dir = log_dir)
     print('----------------------')
-    evaluate(model, y_test, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args['out_dir'], gt_dir, n_samples_x=args['n_samples_x'])
+    evaluate(model, y_test, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args.out_dir, gt_dir, n_samples_x=config['n_samples_x'], n_repeats = 2)

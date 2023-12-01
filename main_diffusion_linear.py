@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 from sbi.analysis import pairplot, conditional_pairplot
 import os
+import yaml
 import shutil
 import utils
 from models.diffusion import *
@@ -216,28 +217,34 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
 
 if __name__ == '__main__':
 
-    # Create the parser
+    # Define the required directory name
+    #required_dir_name = 'main'
+    #utils.check_wd(required_dir_name)
+
+    # Create the parser and parse arguments
     parser = argparse.ArgumentParser(description="Load model parameters.")
-    parser.add_argument('--dataset_size', required=False, default=100000, type=int, help='Size of the Dataset.')
-    args = utils.parse_args(parser)
+    args = utils.diffusion_parser(parser)
+
+    # load config params
+    config_dir = 'config/'
+    config = yaml.safe_load(open(os.path.join(config_dir, "config_linear.yml")))
 
     #load linear forward problem
     f = LinearForwardProblem()
 
     #create data
-    xs,ys = generate_dataset_linear(f.xdim, f, args['dataset_size'])
-    x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=.9, random_state = 7)
+    xs,ys = generate_dataset_linear(f.xdim, f, config['dataset_size'])
+    x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=config['train_size'], random_state = config['random_state'])
 
-    model,loss_fn = utils.get_model_args(args, vars(f),f.score_posterior,f)
+    model,loss_fn = utils.get_model_from_args(args, vars(f),f.score_posterior,f, config)
 
-    resume_training = False
-    if resume_training:
+    if config['resume_training']:
         model.sde.a.load_state_dict(
-            torch.load(os.path.join(args['train_dir'], 'current_model.pt'), map_location=torch.device(device)))
+            torch.load(os.path.join(args.train_dir, 'current_model.pt'), map_location=torch.device(device)))
 
-    log_dir = utils.set_directories(args, resume_training)
+    log_dir = utils.set_directories(args, config['resume_training'])
 
-    optimizer = Adam(model.sde.a.parameters(), lr=1e-4)
+    optimizer = Adam(model.sde.a.parameters(), lr=config['lr'])
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, f, args['train_dir'], log_dir, num_epochs=args['n_epochs'], resume_training = resume_training)
-    evaluate(model, y_test[:args['n_samples_y']], f, args['out_dir'], n_samples_x = args['n_samples_x'], n_repeats = 10)
+    model = train(model,x_train,y_train, optimizer, loss_fn, f, args.train_dir, log_dir, num_epochs=config['n_epochs'], resume_training = config['resume_training'])
+    evaluate(model, y_test[:config['n_samples_y']], f, args.out_dir, n_samples_x = config['n_samples_x'], n_repeats = 2)

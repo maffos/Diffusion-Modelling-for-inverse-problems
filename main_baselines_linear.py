@@ -6,7 +6,7 @@ from models.INN import *
 from losses import *
 from datasets import generate_dataset_linear, get_dataloader_linear
 import utils
-import argparse
+import yaml
 import scipy
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -16,10 +16,10 @@ from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 import torch
 
-def train(snf,diffusion_model,INN,forward_model,xs,ys, num_epochs_INN,num_epochs_SNF,num_epochs_dsm, save_dir, log_dir, batch_size=1000):
+def train(snf,diffusion_model,INN,forward_model,xs,ys, num_epochs_INN,num_epochs_SNF,num_epochs_dsm, save_dir, log_dir, batch_size=1000, lr=1e-4, lr_INN = 1e-3):
     logger = SummaryWriter(log_dir)
     loss_fn_diffusion = DSMLoss()
-    optimizer_snf = Adam(snf.parameters(), lr=1e-4)
+    optimizer_snf = Adam(snf.parameters(), lr=lr)
     prog_bar = tqdm(total=num_epochs_SNF)
     for i in range(num_epochs_SNF):
         data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
@@ -29,19 +29,18 @@ def train(snf,diffusion_model,INN,forward_model,xs,ys, num_epochs_INN,num_epochs
         prog_bar.update()
     prog_bar.close()
 
-    optimizer_diffusion = Adam(diffusion_model.parameters(), lr=1e-4)
+    optimizer_diffusion = Adam(diffusion_model.parameters(), lr=lr)
     prog_bar = tqdm(total=num_epochs_dsm)
-    t_min = torch.inf
     for i in range(num_epochs_dsm):
         data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
-        loss, logger_info = diffusion_model.train_epoch(optimizer_diffusion, loss_fn_diffusion, diffusion_model,
-                                                     data_loader, t_min)
+        loss, logger_info = diffusion_model.train_epoch(optimizer_diffusion, loss_fn_diffusion,
+                                                     data_loader)
         logger.add_scalar('Train/diffusion-Loss', loss, i)
         prog_bar.set_description('diffusion loss:{:.3f}'.format(loss))
         prog_bar.update()
     prog_bar.close()
 
-    optimizer_inn = Adam(INN.parameters(), lr=1e-3)
+    optimizer_inn = Adam(INN.parameters(), lr=lr_INN)
     prog_bar = tqdm(total=num_epochs_INN)
     for i in range(num_epochs_INN):
         data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
@@ -66,7 +65,7 @@ def train(snf,diffusion_model,INN,forward_model,xs,ys, num_epochs_INN,num_epochs
 def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=5000, n_repeats=10, epsilon = 1e-10, xlim = (-3.5,3.5),nbins = 75, figsize = (12,12), labelsize = 30):
     snf.eval()
     INN.eval()
-    diffusion_model.eval()
+    diffusion_model.sde.eval()
 
     nll_diffusion = []
     nll_true = []
@@ -99,7 +98,7 @@ def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=
         posterior = forward_model.get_posterior(y)
 
         for j in range(n_repeats):
-            x_pred_diffusion = diffusion_model.get_grid(y, num_samples=n_samples_x)
+            x_pred_diffusion = diffusion_model(y, num_samples=n_samples_x)
             x_pred_snf = snf(torch.randn(n_samples_x, forward_model.xdim, device=device), inflated_ys)[
                 0]
             x_pred_inn = INN(torch.randn(n_samples_x, forward_model.xdim, device=device), c=inflated_ys)[0]
@@ -200,35 +199,35 @@ def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=
 
 if __name__ =='__main__':
 
-    #parse arguments
-    parser = argparse.ArgumentParser(description="Load model parameters.")
-    parser.add_argument('--train_dir', required=True, type=str,
-                        help='Directory where checkpoints and logs are saved during training.')
-    parser.add_argument('--out_dir', required=True, type=str, help='Directory to save output results.')
-    parser.add_argument('--model', required=False, default='CDE', type=str, help='Which diffusion model to use. Can be either "CDE" or "CDiffE".')
-    parser.add_argument('--hidden_layers', required=False, default=[512,512,512], help='Number of hidden layers.')
-    parser.add_argument('--dataset_size', required=False, default=100000, type=int, help='Size of the Dataset.')
-    parser.add_argument('--n_epochs_dsm', required=False, default = 5000, type = int, help='Number epochs to train the dsm baseline')
-    parser.add_argument('--n_epochs_INN', required=False, default = 500, type = int, help='Number epochs to train the Normalizing Flow baseline')
-    parser.add_argument('--n_epochs_SNF', required=False, default = 100, type = int, help='Number epochs to train the Stochastic Normalizing Flow baseline')
+    # Define the required directory name
+    #required_dir_name = 'main'
+    #utils.check_wd(required_dir_name)
 
-    args = parser.parse_args()
+    # load config params
+    config_dir = 'config/'
+    config = yaml.safe_load(open(os.path.join(config_dir, "config_baselines_linear.yml")))
+    
     # load linear forward problem
     f = LinearForwardProblem()
     
     # create data
-    xs, ys = generate_dataset_linear(f.xdim, f, args['dataset_size'])
-    x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=.9, random_state=7)
+    xs, ys = generate_dataset_linear(f.xdim, f, config['dataset_size'])
+    x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=config['train_size'], random_state=config['random_state'])
 
-    log_dir = utils.set_directories(args)
+    log_dir = utils.set_directories(config)
 
-    snf = create_snf(4, 64, f.log_posterior, metr_steps_per_block=10, dimension=f.xdim, dimension_condition=f.ydim,
-                     noise_std=0.4)
-    if args['model'] == 'CDE':
-        diffusion_model = CDE(xdim=f.xdim, ydim=f.ydim, hidden_layers=args['hidden_layers'])
-    elif args['model'] == 'CDiffE':
-        diffusion_model = CDiffE(xdim=f.xdim, ydim=f.ydim, hidden_layers=args['hidden_layers'])
-    INN = create_INN(4, 64, dimension=f.xdim, dimension_condition=ydim)
+    snf = create_snf(config['num_layers_INN'], config['size_hidden_layers_INN'], f.log_posterior, metr_steps_per_block=config['metr_steps_per_block'], dimension=f.xdim, dimension_condition=f.ydim,
+                     noise_std=config['noise_std'])
 
-    snf, diffusion_model, INN = train(x_train,y_train, n_epochs_INN, n_epochs_SNF, n_epochs_dsm, batch_size=1000, save_dir=train_dir, log_dir=log_dir)
-    evaluate(y_test[:100],snf, diffusion_model, INN, out_dir, n_samples_x=30000)
+    if config['model'] == 'CDE':
+        diffusion_model = CDE(xdim=f.xdim, ydim=f.ydim, hidden_layers=config['hidden_layers'])
+    elif config['model'] == 'CDiffE':
+        diffusion_model = CDiffE(xdim=f.xdim, ydim=f.ydim, hidden_layers=config['hidden_layers'])
+
+    INN = create_INN(config['num_layers_INN'], config['size_hidden_layers_INN'], dimension=f.xdim, dimension_condition=f.ydim)
+
+    snf, diffusion_model, INN = train(snf,diffusion_model,INN,f,x_train,y_train,
+                                      config['n_epochs_INN'], config['n_epochs_SNF'],
+                                      config['n_epochs_dsm'], batch_size=config['batch_size'],
+                                      save_dir=config['train_dir'], log_dir=log_dir, lr = config['lr'], lr_INN=config['lr_INN'])
+    evaluate(y_test[:config['n_samples_y']],snf, diffusion_model, INN, config['out_dir'], n_samples_x=config['n_samples_x'], n_repeats=2)

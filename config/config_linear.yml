@@ -1,0 +1,10 @@
+n_samples_y: 100
+n_samples_x: 30000
+dataset_size: 100000
+train_size: .9
+random_state: 7
+lr: 0.0001
+resume_training: False
+n_repeats: 10
+n_epochs: 5
+hidden_layers: [512,512,512]

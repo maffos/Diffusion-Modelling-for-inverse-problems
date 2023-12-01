@@ -65,16 +65,19 @@ class LinearForwardProblem():
 
         return MultivariateNormal(mean.to(device),cov.to(device))
 
-    def log_posterior(self,xs, ys):
+    def log_posterior(self,xs, ys, epsilon = 1e-6):
         y_res = ys - (self.A @ self.mu + self.b)
         mean = y_res @ (self.A.T @ self.Sigma_y_inv)
         x_res = xs - mean
-        log_probs = .5 * x_res @ self.cov_inv
+        cov = self.Lam - self.A.T @ self.Sigma_y_inv @ self.A  # covariance of the posterior
+        cov_inv = torch.linalg.inv(cov + epsilon * torch.eye(self.xdim))
+
+        log_probs = .5 * x_res @ cov_inv
         log_probs = log_probs[:, None, :] @ x_res[:, :, None]
 
         return log_probs.view(-1, 1)
 
-    #analytical score of the posterior
+    #analytic score of the posterior
     def score_posterior(self,x,y):
         y_res = y-(x@self.A.T+self.b)
         score_prior = -x

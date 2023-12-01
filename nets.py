@@ -4,8 +4,20 @@ import numpy as np
 from FrEIA.framework import InputNode, OutputNode, Node, GraphINN, ConditionNode
 from FrEIA.modules import GLOWCouplingBlock
 import os
-import utils
-    
+
+
+#code taken from https://colab.research.google.com/drive/120kYYBOVa1i0TD85RjlEkFjaWDxSFUx3?usp=sharing#scrollTo=YyQtV7155Nht
+class GaussianFourierProjection(nn.Module):
+  """Gaussian random features for encoding time steps."""
+  def __init__(self, embed_dim, scale=30.):
+    super(GaussianFourierProjection, self).__init__()
+    # Randomly sample weights during initialization. These weights are fixed
+    # during optimization and are not trainable.
+    self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+  def forward(self, x):
+    x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
+    return torch.cat([torch.sin(torch.flatten(x_proj,start_dim= 1)), torch.cos(torch.flatten(x_proj, start_dim=1))], dim=-1)
+
 class MLP(nn.Sequential):
 
     def __init__(self, input_dim, output_dim, hidden_layers, activation):
@@ -60,7 +72,7 @@ class TemporalMLP(nn.Module):
         super(TemporalMLP, self).__init__()
         self.input_dim = input_dim+embed_dim
         self.output_dim = output_dim
-        self.embed = utils.GaussianFourierProjection(embed_dim)
+        self.embed = GaussianFourierProjection(embed_dim)
 
         #build the net
         if activation in ['tanh', 'Tanh']:
@@ -102,7 +114,7 @@ class TemporalMLP_small(nn.Module):
         super(TemporalMLP_small, self).__init__()
         self.input_dim = input_dim + embed_dim
         self.output_dim = output_dim
-        self.embed = utils.GaussianFourierProjection(embed_dim)
+        self.embed = GaussianFourierProjection(embed_dim)
 
         # build the net
         if activation in ['tanh', 'Tanh']:

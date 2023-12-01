@@ -1,11 +1,9 @@
 import matplotlib.pyplot as plt
-from models.diffusion import *
+from models.diffusion import CDE,CDiffE,PosteriorDiffusionEstimator
 from losses import *
 import seaborn as sns
 import numpy as np
 import pandas as pd
-import scipy
-import scipy.stats as st
 import torch.utils.data
 import os
 import shutil
@@ -23,62 +21,28 @@ def product_dict(**kwargs):
     for instance in itertools.product(*vals):
         yield dict(zip(keys, instance))
 
-def rademacher_like(s):
 
-    v = torch.distributions.bernoulli.Bernoulli(torch.ones_like(s)*.5).sample()
-    v[torch.where(v==0)]=-1
-    return v
-
-#function copied from https://discuss.pytorch.org/t/how-to-compute-jacobian-matrix-in-pytorch/14968/14
-def divergence(y, x):
-    div = 0.
-    for i in range(y.shape[-1]):
-        div += torch.autograd.grad(y[..., i], x, torch.ones_like(y[..., i]), create_graph=True, retain_graph=True)[0][..., i:i+1]
-    return div
-
-def batch_gradient(y,x):
-    grad = torch.zeros_like(y)
-    for i in range(y.shape[1]):
-        dy_dx = torch.autograd.grad(y[:,i].sum(),x, retain_graph=True, create_graph=True)[0]
-        dy_dx = dy_dx.view(-1)
-        grad[:,i] += dy_dx
-    return grad
-
-def div_estimator(s,x,num_samples=1, rademacher = True):
-
-    div = torch.zeros(s.shape[0],1)
-    for _ in range(num_samples):
-        if rademacher:
-            v = rademacher_like(s)
-        else:
-            v = torch.randn_like(s)
-        vjp = torch.autograd.grad(s,x,grad_outputs = v, create_graph=True, retain_graph=True)[0]
-        div += (vjp[:,None,:]@v[:,:,None]).view(-1,1)
-
-    div /= num_samples
-    return div
-
-def get_model_args(args, forward_model_params, score_posterior, forward_model):
-    if args['model'] == 'CDE':
-        model = CDE(forward_model_params['xdim'],forward_model_params['ydim'],args['hidden_layers'])
-    elif args['model'] == 'CDiffE':
-        model = CDiffE(forward_model_params['xdim'],forward_model_params['ydim'],args['hidden_layers'])
-    elif args['model'] == 'Posterior':
-        model = PosteriorDiffusionEstimator(forward_model_params['xdim'],forward_model_params['ydim'],args['hidden_layers'])
+def get_model_from_args(args, forward_model_params, score_posterior, forward_model, config):
+    if args.model == 'CDE':
+        model = CDE(forward_model_params['xdim'],forward_model_params['ydim'],config['hidden_layers'])
+    elif args.model == 'CDiffE':
+        model = CDiffE(forward_model_params['xdim'],forward_model_params['ydim'],config['hidden_layers'])
+    elif args.model == 'Posterior':
+        model = PosteriorDiffusionEstimator(forward_model_params['xdim'],forward_model_params['ydim'],config['hidden_layers'])
     else:
         raise ValueError('No valid value for "model" passed. Has to be one of "CDE", "CDiffE" or "Posterior".')
 
-    if args['loss_fn'] == 'PINNLoss':
-        loss_fn = PINNLoss(score_posterior, lam = args['lam'], lam2 = args['lam2'], pde_loss = 'FPE',
-                           ic_metric = args['ic_metric'], metric = args['pde_metric'])
-    elif args['loss_fn'] == 'PINNLoss2':
-        loss_fn = PINNLoss2(score_posterior, lam=args['lam'], pde_loss='FPE', metric=args['pde_metric'])
-    elif args['loss_fn'] == 'DSM_PDE':
+    if args.loss_fn == 'PINNLoss':
+        loss_fn = PINNLoss(score_posterior, lam = args.lam, lam2 = args.lam2, pde_loss = args.pde_loss,
+                           ic_metric = args.ic_metric, metric = args.pde_metric)
+    elif args.loss_fn == 'PINNLoss2':
+        loss_fn = PINNLoss2(score_posterior, lam=args.lam, pde_loss=args.pde_loss, metric=args.pde_metric)
+    elif args.loss_fn == 'DSM_PDE':
         loss_fn = DSM_PDELoss(score_posterior)
-    elif args['loss_fn'] == 'DSM':
+    elif args.loss_fn == 'DSM':
         loss_fn = DSMLoss()
-    elif args['model'] == 'Posterior':
-        loss_fn = model.loss_fn(forward_model,forward_model_params['a'],forward_model_params['b'], lam=args['lam'])
+    elif args.model == 'Posterior':
+        loss_fn = model.loss_fn(forward_model,forward_model_params['a'],forward_model_params['b'], lam=args.lam)
     else:
         raise ValueError('No valid loss_fn was specified. Options are: "PINNLoss","PINNLoss2","DSM" or "DSM_PDE".'
                          'When the model is PosteriorDiffusionEstimator, the PosteriorLoss is used as default.')
@@ -86,12 +50,19 @@ def get_model_args(args, forward_model_params, score_posterior, forward_model):
 
 def set_directories(args,resume_training = False):
 
-    if os.path.exists(args['out_dir']) and not resume_training:
-        shutil.rmtree(args['out_dir'])
-    if not os.path.exists(args['out_dir']):
-        os.makedirs(args['out_dir'])
+    try:
+        if os.path.exists(args.out_dir) and not resume_training:
+            shutil.rmtree(args.out_dir)
+        if not os.path.exists(args.out_dir):
+            os.makedirs(args.out_dir)
 
-    log_dir = os.path.join(args['train_dir'], 'logs')
+        log_dir = os.path.join(args.train_dir, 'logs')
+    except AttributeError:
+        if os.path.exists(args['out_dir']) and not resume_training:
+            shutil.rmtree(args['out_dir'])
+        if not os.path.exists(args['out_dir']):
+            os.makedirs(args['out_dir'])
+        log_dir = os.path.join(args['train_dir'], 'logs')
 
     if os.path.exists(log_dir) and not resume_training:
         shutil.rmtree(log_dir)
@@ -101,7 +72,7 @@ def set_directories(args,resume_training = False):
 
     return log_dir
 
-def parse_args(parser):
+def diffusion_parser(parser):
     # Add arguments
     parser.add_argument('--train_dir', required=True, type=str,
                         help='Directory where checkpoints and logs are saved during training.')
@@ -112,8 +83,6 @@ def parse_args(parser):
                         help='Loss function to use for training. Valid options are "PINNLoss", "PINNLoss2", "DSM" and "DSM_PDE".')
     parser.add_argument('--pde_loss', required=False, default='FPE', type=str,
                         help='Loss enforcing the underlying PDE of the score. Can be either "FPE" or "cScoreFPE.')
-    parser.add_argument('--hidden_layers', required=False, default=[512, 512, 512],
-                        help='Number of hidden layers in the Neural Net.')
     parser.add_argument('--lam', required=False, default=0.001, type=float,
                         help='Regularization parameter lambda controlling the PDE term.')
     parser.add_argument('--lam2', required=False, default=0.01, type=float,
@@ -122,16 +91,22 @@ def parse_args(parser):
                         help='Regularization metric to use for the pde term. Either "L1" or "L2".')
     parser.add_argument('--ic_metric', required=False, default='L2',
                         help='Regularization metric to use for the initial condition. Either "L1" or "L2".')
-    parser.add_argument('--n_samples_y', required=False, default=100, type=int,
-                        help='Number of measurements for model evaluation.')
-    parser.add_argument('--n_samples_x', required=False, default=30000, type=int,
-                        help='Number of X samples per measurement for model evaluation.')
-    parser.add_argument('--n_epochs', required=False, default=20000, type=int, help='Number of training epochs.')
 
     # Parse the arguments
     args = parser.parse_args()
 
     return args
+
+def check_wd(required_dir_name):
+
+    # Get the current working directory
+    current_path = os.getcwd()
+
+    # Check if 'main' is the last part of the current path
+    if not current_path.endswith(required_dir_name):
+        raise ValueError(
+            f"The script must be executed from the 'main' directory of the project, current path is '{current_path}'.")
+
 def plot_density(samples, nbins, size, labelsize = 12, show = False, cmap = 'viridis', limits=None, fname = None,xticks = None, show_mean = False):
     """
     Plot the density of the samples in a grid.
@@ -261,15 +236,3 @@ def plot_csv(file_path, fname, labelsize, max_step = 1000, show_plot = True):
 
     plt.close()
 
-
-#code taken from https://colab.research.google.com/drive/120kYYBOVa1i0TD85RjlEkFjaWDxSFUx3?usp=sharing#scrollTo=YyQtV7155Nht
-class GaussianFourierProjection(nn.Module):
-  """Gaussian random features for encoding time steps."""
-  def __init__(self, embed_dim, scale=30.):
-    super(GaussianFourierProjection, self).__init__()
-    # Randomly sample weights during initialization. These weights are fixed
-    # during optimization and are not trainable.
-    self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
-  def forward(self, x):
-    x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
-    return torch.cat([torch.sin(torch.flatten(x_proj,start_dim= 1)), torch.cos(torch.flatten(x_proj, start_dim=1))], dim=-1)
