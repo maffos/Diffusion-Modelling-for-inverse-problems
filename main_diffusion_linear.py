@@ -1,12 +1,7 @@
-import matplotlib.pyplot as plt
-from sbi.analysis import pairplot, conditional_pairplot
 import os
 import yaml
-import shutil
 import utils
-from models.diffusion import *
 from datasets import get_dataloader_linear,generate_dataset_linear
-from losses import *
 from linear_problem import LinearForwardProblem
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
@@ -20,36 +15,6 @@ import argparse
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-"""
-def get_dataloader_dsm(scale,batch_size, nx,ny,nt):
-
-    eps = 1e-6
-    xs = []
-    ys = []
-    x_probe = torch.randn(ny,xdim)
-    y_probe = f(x_probe)
-    for y in y_probe:
-        posterior = get_posterior(y)
-        xs.append(posterior.sample((nx,)).repeat(nt,1))
-        ys.append(y.repeat(nx*nt,1))
-
-    xs = torch.cat(xs, dim=0)
-    ys = torch.cat(ys,dim=0)
-    ys += torch.randn_like(ys) * scale
-    ts = eps + torch.rand([nx*nt*ny,1])
-    ts[torch.where(ts > 1)] = model.T - eps
-
-    perm = torch.randperm(len(xs))
-    xs = xs[perm]
-    ys = ys[perm]
-    ts = ts[perm]
-    def epoch_data_loader():
-        for i in range(0, nx*ny*nt, batch_size):
-            yield xs[i:i+batch_size].to(device), ys[i:i+batch_size].to(device), ts[i:i+batch_size].to(device)
-
-    return epoch_data_loader
-    
-"""
 
 def train(model,optim, loss_fn, forward_model_params,save_dir, log_dir, num_epochs, batch_size, xs, ys, resume_training = False):
 
@@ -59,54 +24,11 @@ def train(model,optim, loss_fn, forward_model_params,save_dir, log_dir, num_epoc
     for i in range(num_epochs):
 
         epoch_data_loader = get_dataloader_linear(xs, ys,forward_model_params['scale'],batch_size)
-        #train_loader = get_dataloader_dsm(scale,batch_size,200,100,5)
-
-        """
-        mean_loss = 0
-        logger_info = {}
-
-        for x,y in train_loader():
-
-            x = torch.ones_like(x, requires_grad=True).to(x)*x
-            #t = torch.ones_like(t,requires_grad=True).to(t)*t
-            t = sample_t(model,x)
-            if debug:
-                ts+=t.flatten().tolist()
-                if torch.min(t) < t_min:
-                    t_min = torch.min(t)
-                    min_epoch = i
-
-            if loss_fn.name == 'DSMLoss':
-                x_t, target, std, g = model.base_sde.sample(t, x, return_noise=True)
-                s = model.a(x_t, t, y) / g
-                loss = loss_fn(s,std,target).mean()
-                loss_info = {'Train/DSM-Loss': loss}
-            else:
-                loss,loss_info = loss_fn(model,x,t,y)
-            mean_loss += loss.data.item()
-
-            for key,value in loss_info.items():
-                try:
-                    logger_info[key] +=value.item()
-                except:
-                    logger_info[key] = value.item()
-
-            if debug:
-                if torch.isnan(loss):
-                    for key,value in loss_info.items():
-                        print(key + ':' + str(value))
-                    raise ValueError('Loss is nan, min sampled t was {}. Minimal t during training was {} in epoch {}. Current Epoch: {}'.format(torch.min(t),t_min, min_epoch, i))
-
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-        """
         loss,logger_info = model.train_epoch(optim,loss_fn,epoch_data_loader)
 
         logger.add_scalar('Train/Loss', loss, i)
         for key, value in logger_info.items():
             logger.add_scalar('Train/' + key, value, i)
-        prog_bar.update()
 
         if resume_training:
             logger.add_scalar('Train/Loss', loss, i+5000)
@@ -128,7 +50,7 @@ def train(model,optim, loss_fn, forward_model_params,save_dir, log_dir, num_epoc
     torch.save(model.sde.a.state_dict(), current_model_path)
     return model
 
-def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10, xlim = (-3.5,3.5),nbins = 75, figsize = (12,12), labelsize = 30):
+def evaluate(model,ys, forward_model, out_dir, plot_ys, n_samples_x=5000,n_repeats=10, epsilon=1e-10, xlim = (-3.5,3.5),nbins = 75, figsize = (12,12), labelsize = 30):
 
     n_samples_y = ys.shape[0]
     model.sde.eval()
@@ -138,12 +60,9 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
         kl2_sum = 0.
         mse_score_vals = []
         kl2_vals = []
-        # hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
-        plot_ys = [3,5,22,39,51,53,60,71,81,97]
 
         prog_bar = tqdm(total=n_samples_y)
         for i, y in enumerate(ys):
-            # testing
             hist_true_sum = np.zeros((nbins, nbins))
             hist_diffusion_sum = np.zeros((nbins, nbins))
             nll_sum_true = 0
@@ -219,10 +138,6 @@ def evaluate(model,ys, forward_model, out_dir, n_samples_x=5000,n_repeats=10, ep
 
 if __name__ == '__main__':
 
-    # Define the required directory name
-    #required_dir_name = 'main'
-    #utils.check_wd(required_dir_name)
-
     # Create the parser and parse arguments
     parser = argparse.ArgumentParser(description="Load model parameters.")
     args = utils.diffusion_parser(parser)
@@ -244,9 +159,9 @@ if __name__ == '__main__':
         model.sde.a.load_state_dict(
             torch.load(os.path.join(args.train_dir, 'current_model.pt'), map_location=torch.device(device)))
 
-    log_dir = utils.set_directories(args, config['resume_training'])
+    log_dir = utils.set_directories(args.train_dir, args.out_dir, config['resume_training'])
 
     optimizer = Adam(model.sde.a.parameters(), lr=config['lr'])
 
-    model = train(model,x_train,y_train, optimizer, loss_fn, vars(f), args.train_dir, log_dir, num_epochs=config['n_epochs'], resume_training = config['resume_training'])
-    _ = evaluate(model, y_test[:config['n_samples_y']], f, args.out_dir, n_samples_x = config['n_samples_x'], n_repeats = 2)
+    model = train(model, optimizer, loss_fn, vars(f), args.train_dir, log_dir, config['n_epochs'], config['batch_size'], x_train,y_train, resume_training = config['resume_training'])
+    _ = evaluate(model, y_test[:config['n_samples_y']], f, args.out_dir, config['plot_ys'], n_samples_x = config['n_samples_x'], n_repeats = 2)

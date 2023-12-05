@@ -11,7 +11,7 @@ surrogate_dir = 'trained_models/scatterometry'
 gt_dir = 'data/gt_samples_scatterometry'
 
 # load config params
-config = yaml.safe_load(open(os.path.join(config_dir, "config_gridsearch.yml")))
+config = yaml.safe_load(open(os.path.join(config_dir, "config_gridsearch_scatterometry.yml")))
 
 # load the forward model
 forward_model, forward_model_params = load_forward_model(surrogate_dir)
@@ -27,10 +27,9 @@ score_posterior = lambda x, y: -energy_grad(x,
                                                                         forward_model_params['lambd_bd']))[0]
 
 train_args = {'forward_model': forward_model}
-eval_args = {'a': forward_model_params['a'],
+eval_args = {'score_posterior': score_posterior,
+             'a': forward_model_params['a'],
              'b': forward_model_params['b'],
              'lambd_bd': forward_model_params['lambd_bd'],
-             'gt_dir': config['gt_dir'],
-             'n_samples_x': config['n_samples_x']}
-
+             'gt_dir': gt_dir}
 grid_search(y_test, config, forward_model,forward_model_params,score_posterior,train,evaluate, train_args,eval_args)

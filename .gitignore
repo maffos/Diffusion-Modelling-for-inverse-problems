@@ -135,6 +135,8 @@ include/
 Trash/
 old_hemodynamics/
 server_programs/
+results/
+plots/
 
 #logs
 *.tfevents.*

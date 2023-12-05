@@ -1,0 +1,21 @@
+lr: 0.0001
+hidden_layers: [512,512,512]
+resume_training: False
+n_epochs: 1500
+n_samples_y: 100
+n_samples_x: 30000
+batch_size: 1000
+dataset_size: 100000
+random_state: 7
+train_size: .9
+plot_ys: [3,5,22,39,51,53,60,71,81,97]
+src_dir: 'grid_search_results/linear'
+params: {'loss_fn': ['PINNLoss', 'DSM_PDE'],
+              'lam': [1.,0.1,0.01,.001,0001],
+              'lam2': [1.,0.01,.001,.0001],
+              'pde_loss': ['FPE', 'cScoreFPE'],
+              'pde_metric': ['L1','L2'],
+              model: ['CDE'],
+              'ic_metric': ['L1','L2']}
+             
+

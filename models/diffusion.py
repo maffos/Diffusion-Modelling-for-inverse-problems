@@ -1,5 +1,5 @@
 from losses import PosteriorLoss
-from include.sdeflow_light.lib import sdes
+import sdes
 from nets import MLP, MLP2, PosteriorScore
 from overrides import override
 #from abc import ABCMeta, abstractmethod

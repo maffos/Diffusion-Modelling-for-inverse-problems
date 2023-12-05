@@ -34,7 +34,8 @@ def get_log_posterior(samples, forward_model, a, b, ys,lambd_bd):
     p = .5*torch.sum(torch.log(prefactor), dim = 1)
     p2 = 0.5*torch.sum((ys-forward_samps)**2/prefactor, dim = 1)
     p3 = lambd_bd*torch.sum(relu(samples-1)+relu(-1-samples), dim = 1)
-    return p+p2+p3
+    log_prob = p+p2+p3
+    return log_prob
 
 
 # returns samples from the boundary loss approximation prior

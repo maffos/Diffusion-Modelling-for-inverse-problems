@@ -1,14 +1,12 @@
-import matplotlib.pyplot as plt
 import utils
 from models.diffusion import *
 from models.SNF import energy_grad
 from utils_scatterometry import *
-from datasets import (generate_dataset_scatterometry,get_gt_samples_scatterometry,get_dataloader_scatterometry)
+from datasets import generate_dataset_scatterometry,get_gt_samples_scatterometry,get_dataloader_scatterometry
 from losses import *
 import argparse
 import scipy
 import yaml
-import shutil
 import pandas as pd
 from tqdm import tqdm
 import os
@@ -39,17 +37,14 @@ def train(model, optimizer, loss_fn, forward_model_params, save_dir, log_dir, nu
 
     return model
 
-def evaluate(model,ys,forward_model, out_dir, a,b,lambd_bd, gt_dir, n_samples_x=5000,n_repeats=10, epsilon=1e-10,xlim = (-1.2,1.2),nbins = 75, figsize = (12,12), labelsize = 30):
+def evaluate(model,ys,forward_model, out_dir, plot_ys, n_samples_x, score_posterior,a,b,lambd_bd, gt_dir,n_repeats=10, epsilon=1e-10,xlim = (-1.2,1.2),nbins = 75, figsize = (12,12), labelsize = 30):
     n_samples_y = ys.shape[0]
-    model.sde.eval()
     nll_diffusion = []
     nll_mcmc = []
     kl2_sum = 0.
     kl2_vals = []
     kl2_reverse_vals = []
     mse_score_vals = []
-    # plotted y's are hardcoded for reproducability
-    plot_y = [0,5,6,20,23,42,50,77,81,93]
     prog_bar = tqdm(total=n_samples_y)
     for i, y in enumerate(ys):
         # testing
@@ -69,9 +64,7 @@ def evaluate(model,ys,forward_model, out_dir, a,b,lambd_bd, gt_dir, n_samples_x=
             # calculate MSE of score on test set
             t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
             g_0 = model.sde.base_sde.g(t0, x_true_tensor)
-            #score_predict = model.sde.a(x_true_tensor, t0.to(device), inflated_ys.to(device)) / g_0
             score_predict = model.sde.a(x_true_tensor, inflated_ys.to(device), t0.to(device))/g_0
-            #score_predict = score_predict / g_0
             score_true = score_posterior(x_true_tensor,inflated_ys)
             mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
 
@@ -89,7 +82,7 @@ def evaluate(model,ys,forward_model, out_dir, a,b,lambd_bd, gt_dir, n_samples_x=
             nll_sum_diffusion += mcmc_energy(torch.from_numpy(x_pred).to(device)).sum() / n_samples_x
 
         # only plot samples of the last repeat otherwise it gets too much and plot only for some selected y
-        if i in plot_y:
+        if i in plot_ys:
 
             utils.plot_density(x_true, nbins, limits=xlim, xticks=[-1, 0, 1], size=figsize, labelsize=labelsize,
                          fname=os.path.join(out_dir, 'posterior-mcmc-%d.svg'%i))
@@ -152,8 +145,6 @@ if __name__ == '__main__':
 
     #generate test set
     x_test, y_test = generate_dataset_scatterometry(forward_model,forward_model_params['a'],forward_model_params['b'],size=config['n_samples_y'])
-#    x_test, y_test = generate_dataset_scatterometry(forward_model, forward_model_params.a, forward_model_params.b,
-                                                    #size=args.n_samples_y)
 
     # define the score of the posterior
     score_posterior = lambda x, y: -energy_grad(x,
@@ -163,9 +154,11 @@ if __name__ == '__main__':
 
     model,loss_fn = utils.get_model_from_args(vars(args), forward_model_params,score_posterior,forward_model, config)
     optimizer = Adam(model.sde.a.parameters(), lr=1e-4)
-    log_dir = utils.set_directories(args)
+    log_dir = utils.set_directories(args.train_dir, args.out_dir)
 
     print('---------------------')
-    model = train(model, optimizer, loss_fn, forward_model_params, args.save_dir, log_dir, config['num_epochs'],config['batch_size'], forward_model)
+    model = train(model, optimizer, loss_fn, forward_model_params, args.train_dir, log_dir, config['n_epochs'],config['batch_size'], forward_model)
     print('----------------------')
-    _ = evaluate(model, y_test, forward_model, forward_model_params['a'],forward_model_params['b'],forward_model_params['lambd_bd'], args.out_dir, gt_dir, n_samples_x=config['n_samples_x'], n_repeats = 2)
+    _ = evaluate(model, y_test, forward_model, args.out_dir, config['plot_ys'], config['n_samples_x'],score_posterior, forward_model_params['a'],
+                 forward_model_params['b'],forward_model_params['lambd_bd'],
+                 gt_dir, n_repeats = 2)

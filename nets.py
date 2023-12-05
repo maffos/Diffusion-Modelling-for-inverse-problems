@@ -1,10 +1,6 @@
 import torch
 from torch import nn
 import numpy as np
-from FrEIA.framework import InputNode, OutputNode, Node, GraphINN, ConditionNode
-from FrEIA.modules import GLOWCouplingBlock
-import os
-
 
 #code taken from https://colab.research.google.com/drive/120kYYBOVa1i0TD85RjlEkFjaWDxSFUx3?usp=sharing#scrollTo=YyQtV7155Nht
 class GaussianFourierProjection(nn.Module):

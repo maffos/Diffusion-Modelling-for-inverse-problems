@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 from linear_problem import LinearForwardProblem
 from models.diffusion import *
 from models.SNF import *
@@ -11,7 +10,6 @@ import scipy
 import pandas as pd
 from sklearn.model_selection import train_test_split
 import os
-import shutil
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -29,7 +27,7 @@ def train(snf,diffusion_model,INN,forward_model,xs,ys, num_epochs_INN,num_epochs
         prog_bar.update()
     prog_bar.close()
 
-    optimizer_diffusion = Adam(diffusion_model.parameters(), lr=lr)
+    optimizer_diffusion = Adam(diffusion_model.sde.parameters(), lr=lr)
     prog_bar = tqdm(total=num_epochs_dsm)
     for i in range(num_epochs_dsm):
         data_loader = get_dataloader_linear(xs, ys,forward_model.scale,batch_size)
@@ -56,13 +54,13 @@ def train(snf,diffusion_model,INN,forward_model,xs,ys, num_epochs_INN,num_epochs
     chkpnt_file_diff = os.path.join(save_dir, 'diffusion.pt')
     chkpnt_file_inn = os.path.join(save_dir, 'INN.pt')
     torch.save(snf.state_dict(), chkpnt_file_snf)
-    torch.save(diffusion_model.a.state_dict(), chkpnt_file_diff)
+    torch.save(diffusion_model.sde.a.state_dict(), chkpnt_file_diff)
     torch.save(INN.state_dict(), chkpnt_file_inn)
 
     return snf, diffusion_model, INN
 
 
-def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=5000, n_repeats=10, epsilon = 1e-10, xlim = (-3.5,3.5),nbins = 75, figsize = (12,12), labelsize = 30):
+def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, plot_ys, n_samples_x=5000, n_repeats=10, epsilon = 1e-10, xlim = (-3.5,3.5),nbins = 75, figsize = (12,12), labelsize = 30):
     snf.eval()
     INN.eval()
     diffusion_model.sde.eval()
@@ -79,12 +77,9 @@ def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=
     kl3_vals = []
     mse_score_vals = []
 
-    # hardcoded ys to plot the posterior for reproducibility (otherwise we would get ~2000 plots)
-    plot_y = [3, 5, 22, 39, 51, 53, 60, 71, 81, 97]
     n_samples_y = len(ys)
     prog_bar = tqdm(total=len(ys))
     for i, y in enumerate(ys):
-        # testing
         hist_true_sum = np.zeros((nbins, nbins))
         hist_snf_sum = np.zeros((nbins, nbins))
         hist_diffusion_sum = np.zeros((nbins, nbins))
@@ -106,8 +101,8 @@ def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=
 
             # calculate MSE of score on test set
             t0 = torch.zeros(x_true.shape[0], requires_grad=False).view(-1, 1).to(device)
-            g_0 = diffusion_model.base_sde.g(t0, x_true)
-            score_predict = diffusion_model.a(x_true, t0.to(device), inflated_ys.to(device)) / g_0
+            g_0 = diffusion_model.sde.base_sde.g(t0, x_true)
+            score_predict = diffusion_model.sde.a(x_true, inflated_ys.to(device), t0.to(device)) / g_0
             score_true = forward_model.score_posterior(x_true,inflated_ys)
             mse_score_sum += torch.mean(torch.sum((score_predict - score_true) ** 2, dim=1))
 
@@ -130,7 +125,7 @@ def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=
             nll_sum_diffusion -= torch.mean(posterior.log_prob(torch.from_numpy(x_pred_diffusion)))
             nll_sum_inn -= torch.mean(posterior.log_prob(x_pred_inn))
             
-        if i in plot_y:
+        if i in plot_ys:
             
             utils.plot_density(x_true, nbins, limits=xlim, xticks=xlim, size=figsize,
                                labelsize=labelsize,
@@ -199,10 +194,6 @@ def evaluate(ys, snf, diffusion_model, INN, forward_model, out_dir, n_samples_x=
 
 if __name__ =='__main__':
 
-    # Define the required directory name
-    #required_dir_name = 'main'
-    #utils.check_wd(required_dir_name)
-
     # load config params
     config_dir = 'config/'
     config = yaml.safe_load(open(os.path.join(config_dir, "config_baselines_linear.yml")))
@@ -214,7 +205,7 @@ if __name__ =='__main__':
     xs, ys = generate_dataset_linear(f.xdim, f, config['dataset_size'])
     x_train, x_test, y_train, y_test = train_test_split(xs, ys, train_size=config['train_size'], random_state=config['random_state'])
 
-    log_dir = utils.set_directories(config)
+    log_dir = utils.set_directories(config['train_dir'], config['out_dir'])
 
     snf = create_snf(config['num_layers_INN'], config['size_hidden_layers_INN'], f.log_posterior, metr_steps_per_block=config['metr_steps_per_block'], dimension=f.xdim, dimension_condition=f.ydim,
                      noise_std=config['noise_std'])
@@ -230,4 +221,4 @@ if __name__ =='__main__':
                                       config['n_epochs_INN'], config['n_epochs_SNF'],
                                       config['n_epochs_dsm'], batch_size=config['batch_size'],
                                       save_dir=config['train_dir'], log_dir=log_dir, lr = config['lr'], lr_INN=config['lr_INN'])
-    evaluate(y_test[:config['n_samples_y']],snf, diffusion_model, INN, config['out_dir'], n_samples_x=config['n_samples_x'], n_repeats=2)
+    evaluate(y_test[:config['n_samples_y']],snf, diffusion_model, INN, f, config['out_dir'], config['plot_ys'],n_samples_x=config['n_samples_x'], n_repeats=2)

@@ -5,9 +5,10 @@ lr: 0.0001
 lr_INN: 0.001
 train_size: .9
 random_state: 7
-n_epochs_dsm: 5
-n_epochs_SNF: 10
-n_epochs_INN: 5
+n_epochs_dsm: 1500
+n_epochs_SNF: 100
+n_epochs_INN: 500
+plot_ys: [3,5,22,39,51,53,60,71,81,97]
 train_dir: 'trained_models/linearModel/baselines'
 out_dir: 'results/linearModel/baselines'
 model: 'CDE'

@@ -4,15 +4,12 @@ from losses import *
 import seaborn as sns
 import numpy as np
 import pandas as pd
-import torch.utils.data
 import os
 import shutil
 import itertools
 import torch
-from torch import nn
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
 
 #code was taken from https://stackoverflow.com/questions/5228158/cartesian-product-of-a-dictionary-of-lists
 def product_dict(**kwargs):
@@ -70,9 +67,9 @@ def set_directories(train_dir, out_dir,resume_training = False):
 
 def diffusion_parser(parser):
     # Add arguments
-    parser.add_argument('--train_dir', required=True, type=str,
+    parser.add_argument('--train_dir', required=False, default = 'test', type=str,
                         help='Directory where checkpoints and logs are saved during training.')
-    parser.add_argument('--out_dir', required=True, type=str, help='Directory to save output results.')
+    parser.add_argument('--out_dir', required=False, default = 'test', type=str, help='Directory to save output results.')
     parser.add_argument('--model', required=False, type=str, default='CDE',
                         help='Type of model to be used. Currently supported are "CDE","CDiffE" and "Posterior"')
     parser.add_argument('--loss_fn', required=False, type=str, default='PINNLoss',
