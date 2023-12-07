@@ -138,10 +138,6 @@ def evaluate(model,ys, forward_model, out_dir, plot_ys, n_samples_x=5000,n_repea
 
 if __name__ == '__main__':
 
-    # Create the parser and parse arguments
-    parser = argparse.ArgumentParser(description="Load model parameters.")
-    args = utils.diffusion_parser(parser)
-
     # load config params
     config_dir = 'config/'
     config = yaml.safe_load(open(os.path.join(config_dir, "config_linear.yml")))
@@ -153,15 +149,16 @@ if __name__ == '__main__':
     xs,ys = generate_dataset_linear(f.xdim, f, config['dataset_size'])
     x_train,x_test,y_train,y_test = train_test_split(xs,ys,train_size=config['train_size'], random_state = config['random_state'])
 
-    model,loss_fn = utils.get_model_from_args(vars(args), vars(f),f.score_posterior,f, config)
+    model,loss_fn = utils.get_model_from_args(config, vars(f),f.score_posterior,f)
 
     if config['resume_training']:
         model.sde.a.load_state_dict(
-            torch.load(os.path.join(args.train_dir, 'current_model.pt'), map_location=torch.device(device)))
+            torch.load(os.path.join(config['train_dir'], 'current_model.pt'), map_location=torch.device(device)))
 
-    log_dir = utils.set_directories(args.train_dir, args.out_dir, config['resume_training'])
+    log_dir = utils.set_directories(config['train_dir'], config['out_dir'], config['resume_training'])
 
     optimizer = Adam(model.sde.a.parameters(), lr=config['lr'])
 
-    model = train(model, optimizer, loss_fn, vars(f), args.train_dir, log_dir, config['n_epochs'], config['batch_size'], x_train,y_train, resume_training = config['resume_training'])
-    _ = evaluate(model, y_test[:config['n_samples_y']], f, args.out_dir, config['plot_ys'], n_samples_x = config['n_samples_x'], n_repeats = 2)
+    model = train(model, optimizer, loss_fn, vars(f), config['train_dir'], log_dir, config['n_epochs'], config['batch_size'],
+                  x_train,y_train, resume_training = config['resume_training'])
+    _ = evaluate(model, y_test[:config['n_samples_y']], f, config['out_dir'], config['plot_ys'], n_samples_x = config['n_samples_x'])

@@ -221,4 +221,4 @@ if __name__ =='__main__':
                                       config['n_epochs_INN'], config['n_epochs_SNF'],
                                       config['n_epochs_dsm'], batch_size=config['batch_size'],
                                       save_dir=config['train_dir'], log_dir=log_dir, lr = config['lr'], lr_INN=config['lr_INN'])
-    evaluate(y_test[:config['n_samples_y']],snf, diffusion_model, INN, f, config['out_dir'], config['plot_ys'],n_samples_x=config['n_samples_x'], n_repeats=2)
+    evaluate(y_test[:config['n_samples_y']],snf, diffusion_model, INN, f, config['out_dir'], config['plot_ys'],n_samples_x=config['n_samples_x'])

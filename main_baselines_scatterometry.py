@@ -248,4 +248,4 @@ if __name__ == '__main__':
                                     config['n_epochs_SNF'], config['n_epochs_dsm'],config['n_epochs_INN'],
                                     batch_size=config['batch_size'], save_dir=config['train_dir'],
                                     log_dir=log_dir, lr = config['lr'], lr_INN = config['lr_INN'])
-    evaluate(y_test,snf, diffusion_model, INN, forward_model, config['out_dir'], config['plot_ys'], score_posterior, gt_dir, n_samples_x=config['n_samples_x'], n_repeats=2)
+    evaluate(y_test,snf, diffusion_model, INN, forward_model, config['out_dir'], config['plot_ys'], score_posterior, gt_dir, n_samples_x=config['n_samples_x'])

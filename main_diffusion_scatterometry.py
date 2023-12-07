@@ -136,8 +136,7 @@ if __name__ == '__main__':
     config_dir = 'config/'
     surrogate_dir = 'trained_models/scatterometry'
     gt_dir = 'data/gt_samples_scatterometry'
-    train_dir = 'test'
-    out_dir = 'test'
+    
     # load config params
     config = yaml.safe_load(open(os.path.join(config_dir, "config_scatterometry.yml")))
 
@@ -155,11 +154,11 @@ if __name__ == '__main__':
 
     model,loss_fn = utils.get_model_from_args(config, forward_model_params,score_posterior,forward_model)
     optimizer = Adam(model.sde.a.parameters(), lr=1e-4)
-    log_dir = utils.set_directories(train_dir, out_dir)
+    log_dir = utils.set_directories(config['train_dir'], config['out_dir'])
 
     print('---------------------')
-    model = train(model, optimizer, loss_fn, forward_model_params, train_dir, log_dir, config['n_epochs'],config['batch_size'], forward_model)
+    model = train(model, optimizer, loss_fn, forward_model_params, config['train_dir'], log_dir, config['n_epochs'],config['batch_size'], forward_model)
     print('----------------------')
-    _ = evaluate(model, y_test, forward_model, out_dir, config['plot_ys'], config['n_samples_x'],score_posterior, forward_model_params['a'],
+    _ = evaluate(model, y_test, forward_model, config['out_dir'], config['plot_ys'], config['n_samples_x'],score_posterior, forward_model_params['a'],
                  forward_model_params['b'],forward_model_params['lambd_bd'],
-                 gt_dir, n_repeats = 10)
+                 gt_dir)

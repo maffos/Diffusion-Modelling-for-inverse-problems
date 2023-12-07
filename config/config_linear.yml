@@ -7,6 +7,15 @@ lr: 0.0001
 resume_training: False
 n_repeats: 10
 n_epochs: 1500
+model: 'CDE'
+loss_fn: 'PINNLoss'
+lam: 0.001
+lam2: 0.1
+pde_loss: 'FPE'
+pde_metric: 'L1'
+ic_metric: 'L2'
+train_dir: 'test'
+out_dir: 'test'
 batch_size: 1000
 plot_ys: [3,5,22,39,51,53,60,71,81,97]
 hidden_layers: [512,512,512]
