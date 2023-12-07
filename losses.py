@@ -51,12 +51,6 @@ class DSMLoss(nn.Module):
         batch_size = s.shape[0]
         return ((s * std + target) ** 2).view(batch_size, -1).sum(1, keepdim=False) / 2
 
-class CDiffELoss(nn.Module):
-    def __init__(self):
-        self.name = 'CDiffE'
-
-    def forward(self, model):
-        pass
         
 class ScoreFPELoss(nn.Module):
     """
@@ -135,31 +129,39 @@ class DSM_PDELoss(nn.Module):
     Loss as used by Lai et al. (2023)
     """
 
-    def __init__(self, lam=1., pde_loss='FPE'):
+    def __init__(self, lam=1., pde_loss='FPE', pde_metric = 'L1'):
 
         super(DSM_PDELoss,self).__init__()
         self.lam = lam
         self.dsm_loss = DSMLoss()
         if pde_loss == 'FPE':
-            self.pde_loss = ScoreFPELoss()
+            self.pde_loss = ScoreFPELoss(pde_metric)
         else:
-            self.pde_loss = ConditionalScoreFPELoss()
+            self.pde_loss = ConditionalScoreFPELoss(pde_metric)
         self.name = 'DSM_PDELoss'
 
-    def forward(self,model,x,t,y):
+    def forward(self,model,x,y,diffused_samples,t,target,std,g):
 
-        z = torch.concat([x,y], dim = 1)
-        z_t, target, std, g = model.base_sde.sample(t, z, return_noise=True)
-        s = model.a(z_t, t)/g
+        batch_size,xdim = x.shape
+        if diffused_samples.shape[1] == xdim:
+            cond_input = y
+        else:
+            cond_input = torch.Tensor([]) # empty tensor because the condition is already diffused
+
+        score = model.a(diffused_samples,cond_input,t)/g
         beta = model.base_sde.beta(t)
 
-        MSE_u = self.dsm_loss(s,std,target)
+        dsm_loss = self.dsm_loss(score,std,target)
+
         if self.pde_loss.name == 'cScoreFPELoss':
-            MSE_pde = self.lam * self.pde_loss(model,s,t,beta,target,std)
+            alpha = model.base_sde.mean_weight(t)
+            MSE_pde = self.lam * self.pde_loss(score,t,alpha,beta,target,std)
         else:
-            MSE_pde = self.lam*self.pde_loss(s,z_t,t,beta)
-        loss = MSE_u+MSE_pde
-        return loss.mean(), {'DSM-Loss': MSE_u.mean(), 'PDE-Loss': MSE_pde.mean()}
+             MSE_pde = self.lam* self.pde_loss(score,diffused_samples,t,beta)
+
+        loss = torch.mean(dsm_loss+ MSE_pde)
+
+        return loss, {'PDE-Loss': MSE_pde.mean(), 'DSM-Loss':dsm_loss.mean()}
 
 
 
@@ -195,16 +197,16 @@ class PINNLoss(nn.Module):
             >>> loss, loss_components = loss_function(model, x, t, y)
     '''
 
-    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'FPE',ic_metric = 'L1', **kwargs):
+    def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'FPE',ic_metric = 'L1', pde_metric = 'L1'):
 
         super(PINNLoss, self).__init__()
         self.lam = lam
         self.lam2 = lam2
         self.initial_condition = initial_condition
         if pde_loss == 'cScoreFPE':
-            self.pde_loss = ConditionalScoreFPELoss(**kwargs)
+            self.pde_loss = ConditionalScoreFPELoss(pde_metric)
         else:
-            self.pde_loss = ScoreFPELoss(**kwargs)
+            self.pde_loss = ScoreFPELoss(pde_metric)
         self.dsm_loss = DSMLoss()
         self.name = 'PINNLoss'
         self.ic_metric = ic_metric
@@ -242,7 +244,7 @@ class PINNLoss(nn.Module):
 
 class PINNLoss2(nn.Module):
     """
-    Ssimilar to the PINNLoss but without the data-driven DSM-loss term.
+    Similar to the PINNLoss but without the data-driven DSM-loss term.
     """
 
     def __init__(self,initial_condition, lam = 1., lam2 = 1., pde_loss = 'FPE'):
@@ -258,23 +260,35 @@ class PINNLoss2(nn.Module):
         self.eval_metric = DSMLoss()
         self.name = 'PINNLoss2'
 
-    def forward(self,model,x,y,x_t,s_0,s,t,beta,target,std):
+    def forward(self,model,x,y,diffused_samples,t,target,std,g):
 
+        batch_size, xdim = x.shape
+        if diffused_samples.shape[1] == xdim:
+            cond_input = y
+        else:
+            cond_input = torch.Tensor([])  # empty tensor because the condition is already diffused
+        t_0 = torch.zeros_like(t)
+        g_0 = model.base_sde.g(t_0, diffused_samples)
+        s_0 = model.a(x, y, t_0) / g_0
+        score = model.a(diffused_samples, cond_input, t) / g
+        beta = model.base_sde.beta(t)
 
-        #initial_condition_loss = self.lam2 * torch.mean((s_0 - self.initial_condition(x, y)) ** 2, dim=1).view(
-        #    batch_size, 1)
-        batch_size,xdim = x.shape
-        initial_condition_loss = self.lam2 * torch.mean(torch.abs(s_0[:,:xdim] - self.initial_condition(x, y)), dim=1).view(
-            batch_size, 1)
-        #dsm_loss = self.dsm_loss(s, std, target)
+        if self.ic_metric == 'L2':
+            initial_condition_loss = self.lam2 * torch.mean((s_0[:, :xdim] - self.initial_condition(x, y)) ** 2,
+                                                            dim=1).view(batch_size, 1)
+        elif self.ic_metric == 'L1':
+            initial_condition_loss = self.lam2 * torch.mean(torch.abs(s_0[:, :xdim] - self.initial_condition(x, y)),
+                                                            dim=1).view(batch_size, 1)
+
         if self.pde_loss.name == 'cScoreFPELoss':
             alpha = model.base_sde.mean_weight(t)
-            MSE_pde = self.lam * self.pde_loss(s,t,alpha,beta,target,std)
+            MSE_pde = self.lam * self.pde_loss(score, t, alpha, beta, target, std)
         else:
-            MSE_pde = self.lam*self.pde_loss(s, x_t, t, beta)
+            MSE_pde = self.lam * self.pde_loss(score, diffused_samples, t, beta)
+
         loss = torch.mean(initial_condition_loss + MSE_pde)
-        eval_metric = self.eval_metric(s,std,target)
-        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM-Loss': eval_metric.mean()}
+
+        return loss, {'PDE-Loss': MSE_pde.mean(), 'Initial Condition': initial_condition_loss.mean(), 'DSM_eval': self.eval_metric(score,std,target).mean()}
 
 class PosteriorLoss(nn.Module):
 
