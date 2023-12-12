@@ -64,34 +64,6 @@ def set_directories(train_dir, out_dir,resume_training = False):
 
     return log_dir
 
-"""
-def diffusion_parser(parser):
-    # Add arguments
-    parser.add_argument('--train_dir', required=False, default = 'test', type=str,
-                        help='Directory where checkpoints and logs are saved during training.')
-    parser.add_argument('--out_dir', required=False, default = 'test', type=str, help='Directory to save output results.')
-    parser.add_argument('--model', required=False, type=str, default='CDE',
-                        help='Type of model to be used. Currently supported are "CDE","CDiffE" and "Posterior"')
-    parser.add_argument('--loss_fn', required=False, type=str, default='PINNLoss',
-                        help='Loss function to use for training. Valid options are "PINNLoss", "PINNLoss2", "DSM" and "DSM_PDE".')
-    parser.add_argument('--pde_loss', required=False, default='FPE', type=str,
-                        help='Loss enforcing the underlying PDE of the score. Can be either "FPE" or "cScoreFPE.')
-    parser.add_argument('--lam', required=False, default=0.001, type=float,
-                        help='Regularization parameter lambda controlling the PDE term.')
-    parser.add_argument('--lam2', required=False, default=0.01, type=float,
-                        help='Second regularization parameter lambda controlling the initial condition term.')
-    parser.add_argument('--pde_metric', required=False, default='L1',
-                        help='Regularization metric to use for the pde term. Either "L1" or "L2".')
-    parser.add_argument('--ic_metric', required=False, default='L2',
-                        help='Regularization metric to use for the initial condition. Either "L1" or "L2".')
-
-    # Parse the arguments
-    args = parser.parse_args()
-
-    return args
-
-"""
-
 def check_wd(required_dir_name):
 
     # Get the current working directory

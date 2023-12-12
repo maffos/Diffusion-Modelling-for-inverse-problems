@@ -6,11 +6,13 @@ n_samples_y: 100
 n_samples_x: 30000
 batch_size: 1000
 resume_training: False
-model: 'CDiffE'
-loss_fn: 'DSM_PDE'
+model: 'CDE'
+loss_fn: 'PINNLoss'
 lam: 0.01
+lam2: 0.001
 pde_loss: 'FPE'
-pde_metric: 'L2'
+pde_metric: 'L1'
+ic_metric: 'L2'
 train_dir: 'test'
 out_dir: 'test'
 lr: 0.0001

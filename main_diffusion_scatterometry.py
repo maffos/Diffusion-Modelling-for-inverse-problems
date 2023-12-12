@@ -125,14 +125,6 @@ def evaluate(model,ys,forward_model, out_dir, plot_ys, n_samples_x, score_poster
         
 if __name__ == '__main__':
 
-    # Define the required directory name
-    #required_dir_name = 'main'
-    #utils.check_wd(required_dir_name)
-
-    # Create the parser
-    #parser = argparse.ArgumentParser(description="Load model parameters.")
-    #args = utils.diffusion_parser(parser)
-
     config_dir = 'config/'
     surrogate_dir = 'trained_models/scatterometry'
     gt_dir = 'data/gt_samples_scatterometry'
