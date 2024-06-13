@@ -43,8 +43,8 @@ Email: matthias_wamhoff@web.de
 
 ## References
 [1] Batzolis, Georgios, et al. "Conditional image generation with score-based diffusion models." arXiv preprint arXiv:2111.13606 (2021).
-[2] Hagemann, Paul, Johannes Hertrich, and Gabriele Steidl. "Stochastic normalizing flows for inverse problems: a Markov Chains viewpoint." SIAM/ASA Journal on Uncertainty Quantification 10.3 (2022): 1162-1190.
-[3] Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." NeurIPS 2022 Workshop on Score-Based Methods. 2022.
+[2] Hagemann, Paul, Johannes Hertrich, and Gabriele Steidl. "Stochastic normalizing flows for inverse problems: a Markov Chains viewpoint." SIAM/ASA Journal on Uncertainty Quantification 10.3 (2022): 1162-1190. \n
+[3] Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." NeurIPS 2022 Workshop on Score-Based Methods. 2022. \n
 [4] Chung, Hyungjin, et al. "Diffusion posterior sampling for general noisy inverse problems." arXiv preprint arXiv:2209.14687 (2022).
 
 
