@@ -1,8 +1,12 @@
+"""
+This module implements the CDE and CDiffE models from Batzolis, Georgios, et al. "Conditional image generation with score-based diffusion models." arXiv preprint arXiv:2111.13606 (2021).
+As well as a score based diffusion model based on Chung, Hyungjin, et al. "Diffusion posterior sampling for general noisy inverse problems." arXiv preprint arXiv:2209.14687 (2022) (PosteriorDiffusionEstimator).
+"""
+
 from losses import PosteriorLoss
 import sdes
 from nets import MLP, MLP2, PosteriorScore
 from overrides import override
-#from abc import ABCMeta, abstractmethod
 import torch
 from torch import nn
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
