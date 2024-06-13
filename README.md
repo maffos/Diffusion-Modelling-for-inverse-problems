@@ -1,6 +1,6 @@
 # Diffusion Modelling for Inverse Problems
 
-This repository contains the code for my master thesis, which applies score-based generative models to inverse problems. The project includes two examples: one linear problem and one real-world application from scatterometry. In particular it leverages a newly developed partial differential equation (PDE) that is based on the Fokker-Planck Equation and acts on the score. The PDE was independently developed in [3] and termed 'Score-Fokker-Planck-Equation'. 
+This repository contains the code for my master thesis, which applies score-based generative models to inverse problems. The project includes two examples: one linear problem and one real-world application from scatterometry. In particular it leverages a newly developed partial differential equation (PDE) that is based on the Fokker-Planck Equation (FPE) and acts on the score. The PDE was independently developed in [3] and termed 'Score-Fokker-Planck-Equation'. 
 
 ## Table of Contents
 - [Description](#description)
@@ -11,7 +11,7 @@ This repository contains the code for my master thesis, which applies score-base
 - [References](#references)
 
 ## Description
-This project explores the application of score-based generative models to inverse problems. In particular the 'Conditional Denoising Estimator (CDE)' and 'Conditional Diffusive Estimator' (CDiffE) in [1], as well as the 'Diffusion Posterior Sampler' in [4] are implemented. Furthermore, these models are equipped with a novel loss function (PINNLoss) that is based on the PDE called 'ScoreFPE' [3]. In cases where the score of the posterior distribution is known (which is often the case in inverse problems), one can use the ScoreFPE to train score-based generative models as a Physics-Informed-Neural-Network (PINN) [5]. The resulting loss function is called PINNLoss and can be found in the losses.py module. It includes benchmarks of these models against other methods such as stochastic normalizing flows [2]. The project provides two example applications:
+This project explores the application of score-based generative models to inverse problems. In particular the 'Conditional Denoising Estimator (CDE)' and 'Conditional Diffusive Estimator' (CDiffE) in [1], as well as the 'Diffusion Posterior Sampler' in [4] are implemented. Furthermore, these models are equipped with a novel loss function (PINNLoss) that leverages the PDE that acts on the score and is derived from the FPE (ScoreFPE) [3]. In cases where the score of the posterior distribution is known (which is often the case in inverse problems), one can use the ScoreFPE to train score-based generative models as a Physics-Informed-Neural-Network (PINN) [5]. The resulting loss function is called PINNLoss and can be found in the losses.py module. It includes benchmarks of these models against other methods such as stochastic normalizing flows [2]. The project provides two example applications:
 1. A toy linear problem.
 2. A real-world application from scatterometry.
 
