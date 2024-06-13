@@ -15,6 +15,8 @@ This project explores the application of score-based generative models to invers
 1. A toy linear problem.
 2. A real-world application from scatterometry.
 
+For the scatterometry problem, the pretrained surrogate of [2] was used.
+
 ## Features
 - **Benchmarking**: Compare score-based generative models with other methods like stochastic normalizing flows.
 - **Novel Loss Function**: Implementation of a novel loss function for score-based generative models, similar to [3], in the `loss.py` module.
@@ -44,7 +46,5 @@ Email: matthias_wamhoff@web.de
 2. [Scatterometry Application] Hagemann, Paul, Johannes Hertrich, and Gabriele Steidl. "Stochastic normalizing flows for inverse problems: a Markov Chains viewpoint." SIAM/ASA Journal on Uncertainty Quantification 10.3 (2022): 1162-1190.
 3. [Similar Loss Function] Lai, Chieh-Hsin, et al. "Regularizing score-based models with score fokker-planck equations." NeurIPS 2022 Workshop on Score-Based Methods. 2022.
 4. [Diffusion POsterior Sampling] Chung, Hyungjin, et al. "Diffusion posterior sampling for general noisy inverse problems." arXiv preprint arXiv:2209.14687 (2022).
-
-For the scatterometry problem, the pretrained surrogate of [2] was used.
 
 
