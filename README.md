@@ -19,7 +19,7 @@ For the scatterometry problem, the pretrained surrogate of [2] was used.
 
 ## Features
 - **Benchmarking**: Compare score-based generative models with other methods like stochastic normalizing flows.
-- **Novel Loss Function**: Implementation of a novel loss function for score-based generative models, similar to [3], in the `loss.py` module.
+- **Novel Loss Function**: Implementation of a novel loss function for score-based generative models, similar to [3], in the `losses.py` module.
 
 ## Installation
 To install the necessary dependencies, run:
