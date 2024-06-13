@@ -11,7 +11,7 @@ This repository contains the code for my master thesis, which applies score-base
 - [References](#references)
 
 ## Description
-This project explores the application of score-based generative models to inverse problems. It includes benchmarks of these models against other methods such as stochastic normalizing flows. The project provides two example applications:
+This project explores the application of score-based generative models to inverse problems. In particular the 'Conditional Diffusion Estimator' (CDE) and 'Conditional Diffusive Etimator'(CDiffE) in [1] and the 'Diffusion posterior sampling' in [4] are implemented. It includes benchmarks of these models against other methods such as stochastic normalizing flows. The project provides two example applications:
 1. A linear problem
 2. A real-world application from scatterometry.
 
